@@ -150,30 +150,45 @@ fn chappie_package_file() -> Option<PathBuf> {
 }
 
 fn verify_chappie() -> Result<String, String> {
+    let broker = execute_cmd("chappie", &["--version"], None);
+    if !broker.success || broker.stdout.trim().is_empty() {
+        return Err("未检测到 Chappie Broker CLI，请安装 @zetaloop/chappie@1".to_string());
+    }
+    let broker_version = broker.stdout.trim();
+
     if let Some(pkg) = chappie_package_file() {
         if pkg.exists() {
-            let version = std::fs::read_to_string(&pkg)
+            let extension_version = std::fs::read_to_string(&pkg)
                 .ok()
                 .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-                .and_then(|json| json.get("version").and_then(|v| v.as_str()).map(str::to_string));
-            return Ok(match version {
-                Some(version) => format!("Chappie 扩展 v{} 已验证（{}）", version, pkg.display()),
-                None => format!("Chappie 扩展已验证（{}）", pkg.display()),
+                .and_then(|json| {
+                    json.get("version")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                });
+
+            return Ok(match extension_version {
+                Some(version) => format!(
+                    "Chappie Broker v{} + Pi 扩展 v{} 已验证",
+                    broker_version, version
+                ),
+                None => format!("Chappie Broker v{} + Pi 扩展已验证", broker_version),
             });
         }
     }
 
     let list = execute_cmd("pi", &["list"], None);
     if list.success && list.stdout.contains("@zetaloop/chappie") {
-        return Ok("Chappie 扩展已通过 pi list 验证".to_string());
+        return Ok(format!(
+            "Chappie Broker v{} + Pi 扩展已通过 pi list 验证",
+            broker_version
+        ));
     }
 
-    let help = execute_cmd("pi", &["--help"], None);
-    if help.success && help.stdout.contains("--chappie") {
-        return Ok("Chappie 扩展已通过 Pi --chappie 能力验证".to_string());
-    }
-
-    Err("安装命令结束后仍无法验证 @zetaloop/chappie 扩展".to_string())
+    Err(format!(
+        "Chappie Broker v{} 已安装，但未检测到 Pi 的 @zetaloop/chappie 扩展",
+        broker_version
+    ))
 }
 
 fn verify_component(item_id: &str) -> Result<String, String> {
@@ -504,10 +519,20 @@ fn install_component_blocking(app: AppHandle, item_id: String) -> Result<bool, S
             )
         }
         "chappie" => {
+            if find_executable("npm").is_none() {
+                return Err("安装 Chappie Broker 前必须先安装 npm".to_string());
+            }
             if find_executable("pi").is_none() {
                 return Err("安装 Chappie 扩展前必须先安装 Pi".to_string());
             }
-            run_logged(&logger, "pi", &["install", "npm:@zetaloop/chappie"])
+
+            let broker_ok =
+                run_logged(&logger, "npm", &["install", "-g", "@zetaloop/chappie@1"]);
+
+            let extension_ok =
+                run_logged(&logger, "pi", &["install", "npm:@zetaloop/chappie"]);
+
+            broker_ok && extension_ok
         }
         _ => return Err(format!("未知的安装组件: {}", item_id)),
     };

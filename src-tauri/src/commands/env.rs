@@ -326,13 +326,13 @@ pub async fn check_environment(state: State<'_, Arc<AppState>>) -> Result<Vec<En
 
     if pi_path.is_some() || chappie_pkg_file.exists() {
         let list_out = execute_cmd("pi", &["list"], None);
-        let help_out = execute_cmd("pi", &["--help"], None);
+        let broker_out = execute_cmd("chappie", &["--version"], None);
 
         let has_pkg_on_disk = chappie_pkg_file.exists();
         let has_pkg_in_list = list_out.stdout.contains("@zetaloop/chappie");
-        let has_flag = help_out.stdout.contains("--chappie");
+        let has_broker = broker_out.success && !broker_out.stdout.trim().is_empty();
 
-        if has_pkg_on_disk || has_pkg_in_list || has_flag {
+        if has_broker && (has_pkg_on_disk || has_pkg_in_list) {
             chappie_item.installed = true;
             chappie_item.status = "ready".to_string();
             let ver_text = chappie_ver
@@ -637,7 +637,7 @@ log:
 mcp:
   commands:
   - channel: main
-    command: pi --chappie
+    command: chappie
 "#,
         key_file_str, clean_id, port
     );

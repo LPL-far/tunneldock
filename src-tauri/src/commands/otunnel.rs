@@ -484,7 +484,7 @@ pub async fn run_otunnel_doctor(state: State<'_, Arc<AppState>>) -> Result<Docto
 
                 let suggestion = match (name.as_str(), status.as_str()) {
                     ("mcp_server_reachable", "FAIL") => Some(
-                        "本地 MCP 进程未能成功启动或响应。请检查系统 Node.js 是否 >= 26，并在终端执行 'pi --chappie' 确认是否存在语法或模块错误。".to_string(),
+                        "本地 Chappie Broker 未能成功启动或响应。请确认系统 Node.js >= 26 且 'chappie --version' 可正常执行；如 CLI 正常，请检查 ~/.chappie/otunnel.log 中的 Broker 启动错误。".to_string(),
                     ),
                     ("health_listener", "FAIL") => Some(
                         if configured_port == 0 {
@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn does_not_mistake_an_unrelated_bind_failure_for_chappie_collision() {
         let mut items = vec![
-            doctor_item("mcp_target", "PASS", "pi --chappie"),
+            doctor_item("mcp_target", "PASS", "chappie"),
             doctor_item(
                 "mcp_server_reachable",
                 "FAIL",
@@ -698,7 +698,7 @@ mod tests {
             doctor_item("health_listener", "FAIL", "listen EADDRINUSE"),
         ];
         let mut overall = "FAIL".to_string();
-        let raw = "CHECK mcp_target PASS pi --chappie\nlisten EADDRINUSE: 127.0.0.1:8080";
+        let raw = "CHECK mcp_target PASS chappie\nlisten EADDRINUSE: 127.0.0.1:8080";
 
         normalize_active_chappie_collision(&mut items, &mut overall, raw, true);
 
