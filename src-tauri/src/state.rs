@@ -103,7 +103,12 @@ impl AppState {
         }
         self.clear_otunnel_runtime();
 
-        let pids: Vec<u32> = self.running_workspace_pids.lock().values().copied().collect();
+        let pids: Vec<u32> = self
+            .running_workspace_pids
+            .lock()
+            .values()
+            .copied()
+            .collect();
         self.running_workspace_pids.lock().clear();
         for pid in pids {
             let _ = kill_process_tree(pid);
@@ -114,6 +119,7 @@ impl AppState {
         for w in list.iter_mut() {
             w.status = "stopped".to_string();
             w.pid = None;
+            w.session_id = None;
         }
         drop(list);
         self.save_workspaces();
@@ -142,7 +148,10 @@ impl AppState {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let key_file = home.join(".chappie").join("tunnelkey.txt");
         let key = if key_file.exists() {
-            fs::read_to_string(&key_file).unwrap_or_default().trim().to_string()
+            fs::read_to_string(&key_file)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
         } else {
             String::new()
         };
@@ -201,6 +210,7 @@ impl AppState {
                     .map(|mut w| {
                         w.status = "stopped".to_string();
                         w.pid = None;
+                        w.session_id = None;
                         w
                     })
                     .collect();

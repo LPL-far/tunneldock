@@ -88,7 +88,9 @@ fn finish_running_call(
 }
 
 #[tauri::command]
-pub async fn list_workspaces(state: State<'_, Arc<AppState>>) -> Result<Vec<WorkspaceItem>, String> {
+pub async fn list_workspaces(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<WorkspaceItem>, String> {
     let mut list = state.workspaces.lock().clone();
     let pids = state.running_workspace_pids.lock().clone();
 
@@ -105,6 +107,7 @@ pub async fn list_workspaces(state: State<'_, Arc<AppState>>) -> Result<Vec<Work
         } else {
             item.status = "stopped".to_string();
             item.pid = None;
+            item.session_id = None;
         }
 
         // Check git details
@@ -229,7 +232,10 @@ pub async fn start_workspace_session(
     let _ = stop_workspace_session(app.clone(), state.clone(), workspace_id.clone()).await;
 
     let start_msg = if locale.starts_with("en") {
-        format!(">>> Starting workspace Pi session: {} ({})", ws_name, path_str)
+        format!(
+            ">>> Starting workspace Pi session: {} ({})",
+            ws_name, path_str
+        )
     } else {
         format!(">>> 正在启动工作区 Pi Session: {} ({})", ws_name, path_str)
     };
@@ -255,7 +261,18 @@ pub async fn start_workspace_session(
     #[cfg(target_os = "windows")]
     let mut cmd = {
         let mut c = Command::new("cmd.exe");
-        c.args(["/d", "/s", "/c", "pi", "--mode", "rpc", "--provider", "chappie", "--model", "chatgpt"]);
+        c.args([
+            "/d",
+            "/s",
+            "/c",
+            "pi",
+            "--mode",
+            "rpc",
+            "--provider",
+            "chappie",
+            "--model",
+            "chatgpt",
+        ]);
         c.current_dir(&dir);
         c.stdin(Stdio::piped());
         c.stdout(Stdio::piped());
@@ -266,7 +283,14 @@ pub async fn start_workspace_session(
     #[cfg(not(target_os = "windows"))]
     let mut cmd = {
         let mut c = Command::new("pi");
-        c.args(["--mode", "rpc", "--provider", "chappie", "--model", "chatgpt"]);
+        c.args([
+            "--mode",
+            "rpc",
+            "--provider",
+            "chappie",
+            "--model",
+            "chatgpt",
+        ]);
         c.current_dir(&dir);
         c.stdin(Stdio::piped());
         c.stdout(Stdio::piped());
@@ -274,11 +298,16 @@ pub async fn start_workspace_session(
         c
     };
 
-    let mut child = cmd.spawn().map_err(|e| format!("无法启动 Pi Session: {}", e))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("无法启动 Pi Session: {}", e))?;
     let pid = child.id();
 
     // Track PID
-    state.running_workspace_pids.lock().insert(workspace_id.clone(), pid);
+    state
+        .running_workspace_pids
+        .lock()
+        .insert(workspace_id.clone(), pid);
 
     // Write initial command to Pi RPC stdin to query session state & obtain sessionId
     let mut stdin = child.stdin.take();
@@ -288,7 +317,10 @@ pub async fn start_workspace_session(
         let _ = sin.flush();
     }
     if let Some(sin) = stdin {
-        state.running_workspace_stdins.lock().insert(workspace_id.clone(), sin);
+        state
+            .running_workspace_stdins
+            .lock()
+            .insert(workspace_id.clone(), sin);
     }
 
     let stdout = child.stdout.take();
@@ -369,22 +401,35 @@ pub async fn start_workspace_session(
                             let sid = val["data"]["sessionId"]
                                 .as_str()
                                 .or_else(|| val["sessionId"].as_str());
-                            if let Some(session_id) = sid {
-                                let mut list = state_clone.workspaces.lock();
-                                if let Some(w) = list.iter_mut().find(|w| w.id == ws_id) {
-                                    w.session_id = Some(session_id.to_string());
-                                }
-                                drop(list);
-                                state_clone.save_workspaces();
 
-                                let _ = app_handle.emit(
-                                    "workspace-log",
-                                    serde_json::json!({
-                                        "workspace_id": &ws_id,
-                                        "line": format!(">>> Pi 会话已激活并注册至 Broker | Session ID: {}", session_id),
-                                        "is_error": false,
-                                    }),
-                                );
+                            if let Some(session_id) = sid {
+                                let is_current_process = state_clone
+                                    .running_workspace_pids
+                                    .lock()
+                                    .get(&ws_id)
+                                    .copied()
+                                    == Some(pid);
+
+                                if is_current_process {
+                                    let mut list = state_clone.workspaces.lock();
+                                    if let Some(w) = list.iter_mut().find(|w| w.id == ws_id) {
+                                        w.session_id = Some(session_id.to_string());
+                                    }
+                                    drop(list);
+                                    state_clone.save_workspaces();
+
+                                    let _ = app_handle.emit(
+                                        "workspace-log",
+                                        serde_json::json!({
+                                            "workspace_id": &ws_id,
+                                            "line": format!(
+                                                ">>> Pi 会话已启动 | Session ID: {}",
+                                                session_id
+                                            ),
+                                            "is_error": false,
+                                        }),
+                                    );
+                                }
                             }
                         }
                     }
@@ -416,7 +461,9 @@ pub async fn start_workspace_session(
                         continue;
                     }
                     let lower = trimmed.to_lowercase();
-                    let is_err = lower.contains("error:") || lower.contains("fatal:") || lower.contains("exception");
+                    let is_err = lower.contains("error:")
+                        || lower.contains("fatal:")
+                        || lower.contains("exception");
                     let _ = app_handle.emit(
                         "workspace-log",
                         serde_json::json!({
@@ -437,14 +484,32 @@ pub async fn start_workspace_session(
         let state_clone = state.inner().clone();
         std::thread::spawn(move || {
             let _ = child.wait();
-            state_clone.running_workspace_pids.lock().remove(&ws_id);
+
+            let is_current_process = {
+                let mut pids = state_clone.running_workspace_pids.lock();
+                if pids.get(&ws_id).copied() == Some(pid) {
+                    pids.remove(&ws_id);
+                    true
+                } else {
+                    false
+                }
+            };
+
+            // A newer Pi process may already have replaced this one during restart.
+            // Never let the old process tear down the new workspace runtime state.
+            if !is_current_process {
+                return;
+            }
+
             state_clone.running_workspace_stdins.lock().remove(&ws_id);
 
             let mut list = state_clone.workspaces.lock();
             if let Some(w) = list.iter_mut().find(|w| w.id == ws_id) {
                 w.status = "stopped".to_string();
                 w.pid = None;
+                w.session_id = None;
             }
+
             drop(list);
             state_clone.save_workspaces();
 
@@ -495,6 +560,7 @@ pub async fn stop_workspace_session(
         if let Some(w) = list.iter_mut().find(|w| w.id == workspace_id) {
             w.status = "stopped".to_string();
             w.pid = None;
+            w.session_id = None;
         }
     }
 
@@ -535,7 +601,7 @@ pub fn generate_chatgpt_prompt(
         if !sid.trim().is_empty() {
             return if is_en {
                 format!(
-r#"@Chappie
+                    r#"@Chappie
 
 I want to work on project:
 {}
@@ -548,7 +614,7 @@ Then output current cwd, Git branch, and status."#,
                 )
             } else {
                 format!(
-r#"@Chappie
+                    r#"@Chappie
 
 我要操作项目：
 {}
@@ -565,7 +631,7 @@ init({{ sessionId: "{}" }})
 
     if is_en {
         format!(
-r#"@Chappie
+            r#"@Chappie
 
 I want to work on project:
 {}
@@ -583,7 +649,7 @@ If the project does not exist, has multiple matches, or Pi is not online, stop a
         )
     } else {
         format!(
-r#"@Chappie
+            r#"@Chappie
 
 我要操作项目：
 {}
