@@ -91,7 +91,12 @@ pub fn remove_chappie_yaml_files() -> std::io::Result<usize> {
 pub fn ensure_chappie_yaml_synced() {
     if let Some(existing) = get_chappie_yaml_path() {
         if let Ok(content) = fs::read_to_string(&existing) {
-            let _ = sync_chappie_yaml(&content);
+            let migrated = content.replace(
+                "command: pi --chappie",
+                "command: chappie",
+            );
+
+            let _ = sync_chappie_yaml(&migrated);
         }
     }
 }
