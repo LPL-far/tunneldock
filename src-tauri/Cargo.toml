@@ -26,6 +26,7 @@ dirs = "5.0"
 sysinfo = "0.33"
 parking_lot = "0.12"
 tiktoken-rs = "0.12"
+sha2 = "0.10"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"

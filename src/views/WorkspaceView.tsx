@@ -225,6 +225,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {workspaces.map((ws) => {
             const isRunning = ws.status === "ready" || ws.status === "executing";
+            const hasLiveProcess = Boolean(ws.pid);
             const isLoading = actionLoadingId === ws.id;
 
             return (
@@ -324,7 +325,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                 {/* Action Buttons Row */}
                 <div className="pt-3 border-t border-zinc-800/80 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    {!isRunning ? (
+                    {!hasLiveProcess ? (
                       <button
                         onClick={() => handleStart(ws.id, ws.name)}
                         disabled={isLoading}

@@ -1,6 +1,7 @@
 use crate::audit::{parse_rpc_audit_event, RpcAuditEvent};
 use crate::models::{McpCallRecord, WorkspaceItem};
 use crate::state::AppState;
+use crate::utils::chappie_broker;
 use crate::utils::cmd::{execute_cmd, is_process_running, kill_process_tree};
 use crate::utils::time::local_now_rfc3339;
 use std::collections::HashMap;
@@ -102,8 +103,12 @@ pub async fn list_workspaces(
         };
 
         if is_running {
-            item.status = "ready".to_string();
             item.pid = pids.get(&item.id).copied();
+            if item.session_id.is_some() {
+                item.status = "ready".to_string();
+            } else if item.status != "error" {
+                item.status = "starting".to_string();
+            }
         } else {
             item.status = "stopped".to_string();
             item.pid = None;
@@ -325,6 +330,7 @@ pub async fn start_workspace_session(
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
+    let expected_cwd = path_str.clone();
 
     // Stream stdout to terminal drawer & parse session_id
     if let Some(out) = stdout {
@@ -336,6 +342,7 @@ pub async fn start_workspace_session(
             use std::io::{BufRead, BufReader};
             let reader = BufReader::new(out);
             let mut pending_tools: HashMap<String, PendingToolCall> = HashMap::new();
+            let mut broker_probe_started = false;
             for line_res in reader.lines() {
                 if let Ok(line) = line_res {
                     let trimmed = line.trim();
@@ -403,32 +410,88 @@ pub async fn start_workspace_session(
                                 .or_else(|| val["sessionId"].as_str());
 
                             if let Some(session_id) = sid {
-                                let is_current_process = state_clone
-                                    .running_workspace_pids
-                                    .lock()
-                                    .get(&ws_id)
-                                    .copied()
-                                    == Some(pid);
+                                if !broker_probe_started {
+                                    broker_probe_started = true;
 
-                                if is_current_process {
-                                    let mut list = state_clone.workspaces.lock();
-                                    if let Some(w) = list.iter_mut().find(|w| w.id == ws_id) {
-                                        w.session_id = Some(session_id.to_string());
-                                    }
-                                    drop(list);
-                                    state_clone.save_workspaces();
+                                    let session_id = session_id.to_string();
+                                    let probe_app = app_handle.clone();
+                                    let probe_state = state_clone.clone();
+                                    let probe_ws_id = ws_id.clone();
+                                    let probe_cwd = expected_cwd.clone();
 
-                                    let _ = app_handle.emit(
-                                        "workspace-log",
-                                        serde_json::json!({
-                                            "workspace_id": &ws_id,
-                                            "line": format!(
-                                                ">>> Pi 会话已启动 | Session ID: {}",
-                                                session_id
-                                            ),
-                                            "is_error": false,
-                                        }),
-                                    );
+                                    tauri::async_runtime::spawn(async move {
+                                        let result = chappie_broker::wait_for_session(
+                                            &session_id,
+                                            &probe_cwd,
+                                            std::time::Duration::from_secs(10),
+                                        )
+                                        .await;
+
+                                        match result {
+                                            Ok(session) => {
+                                                let is_current_process = probe_state
+                                                    .running_workspace_pids
+                                                    .lock()
+                                                    .get(&probe_ws_id)
+                                                    .copied()
+                                                    == Some(pid);
+
+                                                if !is_current_process {
+                                                    return;
+                                                }
+
+                                                let mut list = probe_state.workspaces.lock();
+                                                if let Some(w) = list.iter_mut().find(|w| w.id == probe_ws_id) {
+                                                    w.status = "ready".to_string();
+                                                    w.session_id = Some(session.id.clone());
+                                                    w.binding_count = session.binding_count;
+                                                    w.error_message = None;
+                                                }
+                                                drop(list);
+                                                probe_state.save_workspaces();
+
+                                                let _ = probe_app.emit(
+                                                    "workspace-log",
+                                                    serde_json::json!({
+                                                        "workspace_id": &probe_ws_id,
+                                                        "line": format!(
+                                                            ">>> Chappie Broker 已确认 Session 在线 | Session ID: {}",
+                                                            session.id
+                                                        ),
+                                                        "is_error": false,
+                                                    }),
+                                                );
+                                            }
+                                            Err(error) => {
+                                                let is_current_process = probe_state
+                                                    .running_workspace_pids
+                                                    .lock()
+                                                    .get(&probe_ws_id)
+                                                    .copied()
+                                                    == Some(pid);
+
+                                                if !is_current_process {
+                                                    return;
+                                                }
+
+                                                let mut list = probe_state.workspaces.lock();
+                                                if let Some(w) = list.iter_mut().find(|w| w.id == probe_ws_id) {
+                                                    w.status = "error".to_string();
+                                                    w.error_message = Some(error.clone());
+                                                }
+                                                drop(list);
+                                                probe_state.save_workspaces();
+                                                let _ = probe_app.emit(
+                                                    "workspace-log",
+                                                    serde_json::json!({
+                                                        "workspace_id": &probe_ws_id,
+                                                        "line": format!(">>> Session 注册验证失败: {}", error),
+                                                        "is_error": true,
+                                                    }),
+                                                );
+                                            }
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -528,9 +591,12 @@ pub async fn start_workspace_session(
     {
         let mut list = state.workspaces.lock();
         if let Some(w) = list.iter_mut().find(|w| w.id == workspace_id) {
-            w.status = "ready".to_string();
             w.pid = Some(pid);
             w.last_started_at = Some(local_now_rfc3339());
+
+            if w.session_id.is_none() && w.status != "error" {
+                w.status = "starting".to_string();
+            }
         }
     }
 
