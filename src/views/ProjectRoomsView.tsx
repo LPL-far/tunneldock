@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  AlertCircle,
   Brain,
   CheckCircle2,
   FlaskConical,
@@ -403,58 +404,89 @@ export const ProjectRoomsView: React.FC = () => {
     }
   };
 
-  const sections: Array<{ id: Section; label: string; icon: React.ElementType }> = [
+  const sections: Array<{
+    id: Section;
+    label: string;
+    icon: React.ElementType;
+    badge?: number;
+  }> = [
     { id: "memory", label: t("project_rooms.memory"), icon: Brain },
-    { id: "tasks", label: t("project_rooms.tasks"), icon: CheckCircle2 },
-    { id: "discussion", label: t("project_rooms.discussion"), icon: MessageSquare },
-    { id: "experiments", label: t("project_rooms.experiments"), icon: FlaskConical },
+    {
+      id: "tasks",
+      label: t("project_rooms.tasks"),
+      icon: CheckCircle2,
+      badge: room?.tasks.length,
+    },
+    {
+      id: "discussion",
+      label: t("project_rooms.discussion"),
+      icon: MessageSquare,
+      badge: room?.discussion.length,
+    },
+    {
+      id: "experiments",
+      label: t("project_rooms.experiments"),
+      icon: FlaskConical,
+      badge: room?.experiments.length,
+    },
     { id: "config", label: t("project_rooms.config"), icon: Server },
     { id: "hygiene", label: t("project_rooms.hygiene"), icon: ShieldCheck },
   ];
 
   return (
-    <div className="p-5 space-y-4 max-w-[1500px] mx-auto">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <Network className="w-5 h-5 text-emerald-400" />
-            <h2 className="text-lg font-semibold text-zinc-100">
-              {t("project_rooms.title")}
-            </h2>
+    <div className="mx-auto max-w-[1580px] space-y-5 p-5">
+      <div className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-800/80 bg-gradient-to-r from-zinc-900/60 via-dark-card to-zinc-950/40 px-4 py-3.5">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2.5">
+            <div className="rounded-lg border border-emerald-900/50 bg-emerald-950/20 p-2">
+              <Network className="h-4 w-4 text-emerald-400" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-[15px] font-semibold tracking-tight text-zinc-100">
+                  {t("project_rooms.title")}
+                </h2>
+                <span className="rounded-md border border-zinc-800 bg-zinc-950/50 px-1.5 py-0.5 text-[9px] font-mono text-zinc-600">
+                  {t("project_rooms.rooms_count", { count: summaries.length })}
+                </span>
+              </div>
+              <p className="mt-0.5 max-w-3xl truncate text-[10px] text-zinc-600">
+                {t("project_rooms.desc")}
+              </p>
+            </div>
           </div>
-          <p className="mt-1 text-xs text-zinc-500 max-w-3xl">
-            {t("project_rooms.desc")}
-          </p>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
             disabled={busy}
             onClick={() => void refreshTelemetry()}
-            className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-[11px] text-zinc-400 hover:text-zinc-100 hover:border-zinc-700 disabled:opacity-40"
+            className="flex h-8 items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 text-[10px] font-medium text-zinc-400 transition hover:border-zinc-700 hover:text-zinc-100 disabled:opacity-40"
             title={t("project_rooms.refresh_capacity")}
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <Sparkles className="h-3.5 w-3.5" />
             {t("project_rooms.refresh_capacity")}
           </button>
           <button
             type="button"
             onClick={() => void refreshCurrent()}
-            className="p-2 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950/50 text-zinc-500 transition hover:border-zinc-700 hover:text-zinc-100"
             title={t("common.refresh")}
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="rounded-lg border border-rose-800/60 bg-rose-950/40 px-4 py-3 text-xs text-rose-300">
-          {error}
+        <div className="flex items-start gap-2.5 rounded-xl border border-rose-900/60 bg-rose-950/20 px-3.5 py-3 text-xs text-rose-300">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
         </div>
       )}
 
-      <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-4 items-start">
+      <div className="grid grid-cols-[260px_minmax(0,1fr)] items-start gap-5">
         <ProjectRoomList
           summaries={summaries}
           selectedId={selectedId}
@@ -480,22 +512,34 @@ export const ProjectRoomsView: React.FC = () => {
                 onCopyProjectPrompt={() => void copyProjectPrompt()}
               />
 
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1 rounded-xl border border-zinc-800/80 bg-zinc-950/35 p-1">
                 {sections.map((item) => {
                   const Icon = item.icon;
+                  const active = section === item.id;
                   return (
                     <button
                       type="button"
                       key={item.id}
                       onClick={() => setSection(item.id)}
-                      className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs transition-colors ${
-                        section === item.id
-                          ? "border-zinc-600 bg-zinc-800 text-zinc-100"
-                          : "border-zinc-800 bg-zinc-900/70 text-zinc-500 hover:text-zinc-300"
+                      className={`flex h-8 items-center gap-1.5 rounded-lg px-3 text-[11px] font-medium transition-all ${
+                        active
+                          ? "bg-zinc-800 text-zinc-100 shadow-sm"
+                          : "text-zinc-600 hover:bg-zinc-900/70 hover:text-zinc-300"
                       }`}
                     >
-                      <Icon className="w-3.5 h-3.5" />
+                      <Icon className="h-3.5 w-3.5" />
                       {item.label}
+                      {item.badge != null && item.badge > 0 && (
+                        <span
+                          className={`ml-0.5 rounded-md px-1.5 py-0.5 text-[9px] tabular-nums ${
+                            active
+                              ? "bg-zinc-700 text-zinc-300"
+                              : "bg-zinc-900 text-zinc-600"
+                          }`}
+                        >
+                          {item.badge}
+                        </span>
+                      )}
                     </button>
                   );
                 })}

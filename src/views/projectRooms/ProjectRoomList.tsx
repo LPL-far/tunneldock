@@ -1,5 +1,7 @@
 import React from "react";
+import { Beaker, MessageSquareText, Radio, SquareCheckBig } from "lucide-react";
 import { ProjectRoomSummary } from "../../types";
+import { useTranslation } from "../../i18n";
 
 interface Props {
   summaries: ProjectRoomSummary[];
@@ -7,50 +9,111 @@ interface Props {
   onSelect: (projectId: string) => void;
 }
 
+const sessionDot = (status: string) => {
+  if (status === "ready" || status === "executing") return "bg-emerald-400";
+  if (status === "starting") return "bg-amber-400";
+  return "bg-zinc-600";
+};
+
 export const ProjectRoomList: React.FC<Props> = ({
   summaries,
   selectedId,
   onSelect,
-}) => (
-  <div className="space-y-2">
-    {summaries.map((item) => (
-      <button
-        type="button"
-        key={item.id}
-        onClick={() => onSelect(item.id)}
-        className={`w-full text-left rounded-xl border p-4 transition-colors ${
-          selectedId === item.id
-            ? "border-emerald-700/70 bg-emerald-950/15"
-            : "border-zinc-800 bg-dark-card hover:border-zinc-700"
-        }`}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-semibold text-zinc-100">{item.name}</span>
-          <span
-            className={`w-2 h-2 rounded-full ${
-              item.session_status === "ready" ||
-              item.session_status === "executing"
-                ? "bg-emerald-500"
-                : item.session_status === "starting"
-                ? "bg-amber-500"
-                : "bg-zinc-600"
+}) => {
+  const { t } = useTranslation();
+
+  return (
+    <div className="sticky top-4 space-y-2">
+      <div className="mb-3 flex items-center justify-between px-1">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">
+          {t("project_rooms.project_list")}
+        </span>
+        <span className="rounded-md border border-zinc-800 bg-zinc-900/70 px-1.5 py-0.5 text-[9px] font-mono text-zinc-600">
+          {summaries.length}
+        </span>
+      </div>
+
+      {summaries.map((item) => {
+        const selected = selectedId === item.id;
+        return (
+          <button
+            type="button"
+            key={item.id}
+            onClick={() => onSelect(item.id)}
+            className={`group relative w-full overflow-hidden rounded-xl border p-3.5 text-left transition-all ${
+              selected
+                ? "border-zinc-600 bg-zinc-900 shadow-[0_10px_32px_rgba(0,0,0,0.18)]"
+                : "border-zinc-800/80 bg-dark-card hover:border-zinc-700 hover:bg-zinc-900/60"
             }`}
-            title={`Pi Session: ${item.session_status}`}
-          />
-        </div>
-        <div className="mt-2 text-[10px] font-mono text-zinc-500 truncate">
-          {item.local_root}
-        </div>
-        <div className="mt-2 text-[10px] font-mono text-zinc-600">
-          Pi: {item.session_status}
-          {item.binding_count > 0 ? ` · ${item.binding_count} bound` : ""}
-        </div>
-        <div className="mt-2 grid grid-cols-3 gap-1 text-[10px] text-zinc-500">
-          <span>{item.active_tasks} task</span>
-          <span>{item.experiments} exp</span>
-          <span>{item.discussion_messages} msg</span>
-        </div>
-      </button>
-    ))}
-  </div>
-);
+          >
+            {selected && (
+              <span className="absolute inset-y-3 left-0 w-0.5 rounded-r bg-emerald-400" />
+            )}
+
+            <div className="flex items-center justify-between gap-3">
+              <span
+                className={`truncate text-[13px] font-semibold ${
+                  selected ? "text-zinc-50" : "text-zinc-200"
+                }`}
+              >
+                {item.name}
+              </span>
+              <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-zinc-800 bg-black/20 px-2 py-1 text-[9px] font-medium text-zinc-500">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${sessionDot(
+                    item.session_status
+                  )}`}
+                />
+                {item.session_status}
+              </span>
+            </div>
+
+            <div
+              className="mt-2 truncate text-[9px] font-mono text-zinc-600"
+              title={item.local_root}
+            >
+              {item.local_root}
+            </div>
+
+            <div className="mt-3 grid grid-cols-3 gap-1.5">
+              <div className="rounded-lg border border-zinc-800/70 bg-zinc-950/35 px-2 py-1.5">
+                <div className="flex items-center gap-1 text-zinc-600">
+                  <SquareCheckBig className="h-3 w-3" />
+                  <span className="text-[8px] uppercase tracking-wide">Task</span>
+                </div>
+                <div className="mt-0.5 text-[11px] font-semibold tabular-nums text-zinc-300">
+                  {item.active_tasks}
+                </div>
+              </div>
+              <div className="rounded-lg border border-zinc-800/70 bg-zinc-950/35 px-2 py-1.5">
+                <div className="flex items-center gap-1 text-zinc-600">
+                  <Beaker className="h-3 w-3" />
+                  <span className="text-[8px] uppercase tracking-wide">Exp</span>
+                </div>
+                <div className="mt-0.5 text-[11px] font-semibold tabular-nums text-zinc-300">
+                  {item.experiments}
+                </div>
+              </div>
+              <div className="rounded-lg border border-zinc-800/70 bg-zinc-950/35 px-2 py-1.5">
+                <div className="flex items-center gap-1 text-zinc-600">
+                  <MessageSquareText className="h-3 w-3" />
+                  <span className="text-[8px] uppercase tracking-wide">Msg</span>
+                </div>
+                <div className="mt-0.5 text-[11px] font-semibold tabular-nums text-zinc-300">
+                  {item.discussion_messages}
+                </div>
+              </div>
+            </div>
+
+            {item.binding_count > 0 && (
+              <div className="mt-2.5 flex items-center gap-1.5 text-[9px] text-emerald-500/70">
+                <Radio className="h-3 w-3" />
+                {item.binding_count} web binding
+              </div>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
