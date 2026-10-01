@@ -189,7 +189,14 @@ pub async fn get_otunnel_status(
 
     let mut running = is_running_tracked;
     if !running {
-        // Clear stale pid from state
+        // Clear stale pid from state. Ownership is separate from discovery so
+        // an externally managed daemon can survive TunnelDock restarts.
+        if let Some(stale_pid) = pid {
+            let mut owned_pid = state.otunnel_owned_pid.lock();
+            if *owned_pid == Some(stale_pid) {
+                *owned_pid = None;
+            }
+        }
         *state.otunnel_pid.lock() = None;
         pid = None;
 
@@ -254,6 +261,7 @@ pub async fn get_otunnel_status(
 
     if !running && !healthz_ok {
         pid = None;
+        state.otunnel_owned_pid.lock().take();
         state.clear_otunnel_runtime();
     }
 
@@ -348,6 +356,7 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
     let pid = child.id();
 
     *state.otunnel_pid.lock() = Some(pid);
+    *state.otunnel_owned_pid.lock() = Some(pid);
     *state.otunnel_health_url_file.lock() = Some(health_url_file.clone());
 
     let startup_client = match reqwest::Client::builder()
@@ -358,6 +367,7 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
         Err(error) => {
             let _ = kill_process_tree(pid);
             *state.otunnel_pid.lock() = None;
+            state.otunnel_owned_pid.lock().take();
             state.clear_otunnel_runtime();
             return Err(format!("创建健康检查客户端失败：{}", error));
         }
@@ -370,6 +380,7 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
         match child.try_wait() {
             Ok(Some(status)) => {
                 *state.otunnel_pid.lock() = None;
+                state.otunnel_owned_pid.lock().take();
                 state.clear_otunnel_runtime();
                 let log = fs::read_to_string(&log_file).unwrap_or_default();
                 return Err(format_startup_failure(
@@ -382,6 +393,7 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
             Err(error) => {
                 let _ = kill_process_tree(pid);
                 *state.otunnel_pid.lock() = None;
+                state.otunnel_owned_pid.lock().take();
                 state.clear_otunnel_runtime();
                 return Err(format!("检查 otunnel 启动状态失败：{}", error));
             }
@@ -411,6 +423,7 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
         if Instant::now() >= deadline {
             let _ = kill_process_tree(pid);
             *state.otunnel_pid.lock() = None;
+            state.otunnel_owned_pid.lock().take();
             state.clear_otunnel_runtime();
             let log = fs::read_to_string(&log_file).unwrap_or_default();
             let detail = url_file_error
@@ -432,6 +445,10 @@ pub async fn stop_otunnel(state: State<'_, Arc<AppState>>) -> Result<bool, Strin
             killed = true;
         }
         *state.otunnel_pid.lock() = None;
+        let mut owned_pid = state.otunnel_owned_pid.lock();
+        if *owned_pid == Some(pid) {
+            *owned_pid = None;
+        }
     }
 
     // If the daemon was started outside the current in-memory state but is still
@@ -443,6 +460,7 @@ pub async fn stop_otunnel(state: State<'_, Arc<AppState>>) -> Result<bool, Strin
         }
     }
 
+    state.otunnel_owned_pid.lock().take();
     state.clear_otunnel_runtime();
 
     Ok(killed)

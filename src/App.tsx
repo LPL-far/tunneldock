@@ -191,6 +191,7 @@ export const App: React.FC = () => {
     let disposed = false;
     let unlistenInstall: (() => void) | undefined;
     let unlistenWs: (() => void) | undefined;
+    let unlistenWorkspaceUpdated: (() => void) | undefined;
     let unlistenAudit: (() => void) | undefined;
 
     const setupListeners = async () => {
@@ -226,8 +227,21 @@ export const App: React.FC = () => {
           unlistenWs = stopWs;
         }
 
+        const stopWorkspaceUpdated = await listen(
+          "workspace-updated",
+          () => {
+            void loadWorkspaces();
+          }
+        );
+        if (disposed) {
+          stopWorkspaceUpdated();
+        } else {
+          unlistenWorkspaceUpdated = stopWorkspaceUpdated;
+        }
+
         const stopAudit = await listen("audit-updated", () => {
           void loadHistoryData();
+          void loadWorkspaces();
         });
         if (disposed) {
           stopAudit();
@@ -245,9 +259,10 @@ export const App: React.FC = () => {
       disposed = true;
       unlistenInstall?.();
       unlistenWs?.();
+      unlistenWorkspaceUpdated?.();
       unlistenAudit?.();
     };
-  }, [loadHistoryData]);
+  }, [loadHistoryData, loadWorkspaces]);
 
   // Header Toggle Otunnel
   const handleToggleOtunnel = async () => {

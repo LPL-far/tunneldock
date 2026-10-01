@@ -94,6 +94,7 @@ pub async fn list_workspaces(
 ) -> Result<Vec<WorkspaceItem>, String> {
     let mut list = state.workspaces.lock().clone();
     let pids = state.running_workspace_pids.lock().clone();
+    let broker_sessions = chappie_broker::list_sessions().await.ok();
 
     for item in &mut list {
         let is_running = if let Some(pid) = pids.get(&item.id) {
@@ -104,15 +105,38 @@ pub async fn list_workspaces(
 
         if is_running {
             item.pid = pids.get(&item.id).copied();
-            if item.session_id.is_some() {
-                item.status = "ready".to_string();
-            } else if item.status != "error" {
+
+            if let Some(sessions) = broker_sessions.as_ref() {
+                let session = item
+                    .session_id
+                    .as_deref()
+                    .and_then(|session_id| sessions.iter().find(|s| s.id == session_id));
+
+                if let Some(session) = session {
+                    item.binding_count = session.binding_count;
+                    item.status = if matches!(session.status.as_str(), "executing" | "generating") {
+                        "executing".to_string()
+                    } else {
+                        "ready".to_string()
+                    };
+                    item.error_message = None;
+                } else if item.status != "error" {
+                    item.binding_count = 0;
+                    item.status = "starting".to_string();
+                }
+            } else if item.session_id.is_none() && item.status != "error" {
+                // A transient Broker query failure should not downgrade a previously
+                // verified ready session. Only sessions that have never registered
+                // remain in the starting state until the next successful refresh.
+                item.binding_count = 0;
                 item.status = "starting".to_string();
             }
         } else {
             item.status = "stopped".to_string();
             item.pid = None;
             item.session_id = None;
+            item.binding_count = 0;
+            item.error_message = None;
         }
 
         // Check git details
@@ -449,6 +473,10 @@ pub async fn start_workspace_session(
                                                 }
                                                 drop(list);
                                                 probe_state.save_workspaces();
+                                                let _ = probe_app.emit(
+                                                    "workspace-updated",
+                                                    serde_json::json!({ "workspace_id": &probe_ws_id }),
+                                                );
 
                                                 let _ = probe_app.emit(
                                                     "workspace-log",
@@ -477,10 +505,19 @@ pub async fn start_workspace_session(
                                                 let mut list = probe_state.workspaces.lock();
                                                 if let Some(w) = list.iter_mut().find(|w| w.id == probe_ws_id) {
                                                     w.status = "error".to_string();
+                                                    // Keep the Pi RPC session ID so a later Broker
+                                                    // reconnect can be recognized on refresh. The
+                                                    // UI only offers direct binding for ready sessions.
+                                                    w.session_id = Some(session_id.clone());
+                                                    w.binding_count = 0;
                                                     w.error_message = Some(error.clone());
                                                 }
                                                 drop(list);
                                                 probe_state.save_workspaces();
+                                                let _ = probe_app.emit(
+                                                    "workspace-updated",
+                                                    serde_json::json!({ "workspace_id": &probe_ws_id }),
+                                                );
                                                 let _ = probe_app.emit(
                                                     "workspace-log",
                                                     serde_json::json!({
@@ -571,10 +608,16 @@ pub async fn start_workspace_session(
                 w.status = "stopped".to_string();
                 w.pid = None;
                 w.session_id = None;
+                w.binding_count = 0;
+                w.error_message = None;
             }
 
             drop(list);
             state_clone.save_workspaces();
+            let _ = app_handle.emit(
+                "workspace-updated",
+                serde_json::json!({ "workspace_id": &ws_id }),
+            );
 
             let locale = state_clone.settings.lock().locale.clone();
             let _ = app_handle.emit(
@@ -627,6 +670,8 @@ pub async fn stop_workspace_session(
             w.status = "stopped".to_string();
             w.pid = None;
             w.session_id = None;
+            w.binding_count = 0;
+            w.error_message = None;
         }
     }
 

@@ -58,6 +58,7 @@ pub struct WorkspaceItem {
     pub status: String, // "stopped", "starting", "ready", "executing", "error"
     pub session_id: Option<String>,
     pub pid: Option<u32>,
+    #[serde(default)]
     pub binding_count: u32,
     pub git_branch: Option<String>,
     pub git_status: Option<String>,
@@ -111,7 +112,7 @@ pub struct CommandOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpCallRecord, TunnelSettings};
+    use super::{McpCallRecord, TunnelSettings, WorkspaceItem};
 
     #[test]
     fn old_history_records_default_workspace_identity_and_tokens() {
@@ -134,6 +135,27 @@ mod tests {
         assert_eq!(record.input_tokens, 0);
         assert_eq!(record.output_tokens, 0);
         assert_eq!(record.total_tokens, 0);
+    }
+
+    #[test]
+    fn legacy_workspace_without_binding_count_defaults_to_zero() {
+        let legacy = r#"{
+            "id":"ws-legacy",
+            "name":"legacy",
+            "path":"D:\\legacy",
+            "status":"stopped",
+            "session_id":null,
+            "pid":null,
+            "git_branch":null,
+            "git_status":null,
+            "last_started_at":null,
+            "error_message":null
+        }"#;
+
+        let workspace: WorkspaceItem =
+            serde_json::from_str(legacy).expect("legacy workspace should still load");
+
+        assert_eq!(workspace.binding_count, 0);
     }
 
     #[test]

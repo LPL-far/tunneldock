@@ -135,6 +135,7 @@ fn remove_known_cargo_binary(
         .map_err(|err| format!("删除 {} 失败: {}", resolved_path.display(), err))
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn brew_manages(formula: &str) -> bool {
     find_executable("brew").is_some()
         && execute_cmd("brew", &["list", "--versions", formula], None).success
@@ -370,9 +371,15 @@ fn uninstall_tunnel_config(
 }
 
 fn stop_otunnel_process(state: &Arc<AppState>, logger: &UninstallLogger) {
-    if let Some(pid) = state.otunnel_pid.lock().take() {
+    if let Some(pid) = state.otunnel_owned_pid.lock().take() {
         logger.info(format!("卸载前停止 TunnelDock 管理的 otunnel 进程 PID {}。", pid));
         let _ = kill_process_tree(pid);
+        let mut known_pid = state.otunnel_pid.lock();
+        if *known_pid == Some(pid) {
+            *known_pid = None;
+        }
+        drop(known_pid);
+        state.clear_otunnel_runtime();
     }
 }
 
@@ -399,6 +406,9 @@ fn stop_workspace_processes(state: &Arc<AppState>, logger: &UninstallLogger) {
     for workspace in workspaces.iter_mut() {
         workspace.status = "stopped".to_string();
         workspace.pid = None;
+        workspace.session_id = None;
+        workspace.binding_count = 0;
+        workspace.error_message = None;
     }
     drop(workspaces);
     state.save_workspaces();

@@ -158,7 +158,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   const handleOpenPromptModal = async (ws: WorkspaceItem) => {
     try {
-      const p = await generateChatGptPrompt(ws.path, ws.session_id, locale);
+      const verifiedSessionId =
+        ws.status === "ready" || ws.status === "executing"
+          ? ws.session_id
+          : null;
+      const p = await generateChatGptPrompt(ws.path, verifiedSessionId, locale);
       setPromptText(p);
       setPromptModalWs(ws);
     } catch (err) {
@@ -226,6 +230,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           {workspaces.map((ws) => {
             const isRunning = ws.status === "ready" || ws.status === "executing";
             const hasLiveProcess = Boolean(ws.pid);
+            const isStarting = ws.status === "starting" && hasLiveProcess;
+            const isError = ws.status === "error";
             const isLoading = actionLoadingId === ws.id;
 
             return (
@@ -234,6 +240,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                 className={`p-5 rounded-lg bg-dark-card border transition-all flex flex-col justify-between space-y-4 ${
                   isRunning
                     ? "border-emerald-800/50 shadow-[0_0_15px_rgba(16,185,129,0.06)]"
+                    : isError
+                    ? "border-rose-800/60 shadow-[0_0_15px_rgba(244,63,94,0.05)]"
+                    : isStarting
+                    ? "border-amber-800/50"
                     : "border-zinc-800 hover:border-zinc-700/80"
                 }`}
               >
@@ -251,7 +261,17 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                             {t("workspace_view.session_online")}
                           </span>
                         )}
-                        {!isRunning && (
+                        {isStarting && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950/50 text-amber-300 border border-amber-800/60 shrink-0 whitespace-nowrap">
+                            {t("workspace_view.starting_session")}
+                          </span>
+                        )}
+                        {isError && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-950/50 text-rose-300 border border-rose-800/60 shrink-0 whitespace-nowrap">
+                            {t("workspace_view.status_error")}
+                          </span>
+                        )}
+                        {!isRunning && !isStarting && !isError && (
                           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-900 text-zinc-500 border border-zinc-800 shrink-0 whitespace-nowrap">
                             {t("workspace_view.not_started")}
                           </span>
@@ -309,7 +329,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                       <div className="text-zinc-300 font-medium truncate">
                         {ws.session_id
                           ? ws.session_id
-                          : isRunning
+                          : hasLiveProcess
                           ? t("workspace_view.waiting_probe")
                           : t("workspace_view.not_activated")}
                       </div>
@@ -318,6 +338,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                           count: ws.binding_count,
                         })}
                       </div>
+                      {ws.error_message && (
+                        <div
+                          className="text-[10px] text-rose-400 truncate"
+                          title={ws.error_message}
+                        >
+                          {ws.error_message}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

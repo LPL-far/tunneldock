@@ -20,6 +20,7 @@ pub struct AppState {
     pub running_workspace_pids: Arc<Mutex<HashMap<String, u32>>>,
     pub running_workspace_stdins: Arc<Mutex<HashMap<String, std::process::ChildStdin>>>,
     pub otunnel_pid: Arc<Mutex<Option<u32>>>,
+    pub otunnel_owned_pid: Arc<Mutex<Option<u32>>>,
     pub otunnel_health_url: Arc<Mutex<Option<String>>>,
     pub otunnel_health_url_file: Arc<Mutex<Option<PathBuf>>>,
     pub history: Arc<Mutex<Vec<McpCallRecord>>>,
@@ -41,6 +42,7 @@ impl AppState {
             running_workspace_pids: Arc::new(Mutex::new(HashMap::new())),
             running_workspace_stdins: Arc::new(Mutex::new(HashMap::new())),
             otunnel_pid: Arc::new(Mutex::new(None)),
+            otunnel_owned_pid: Arc::new(Mutex::new(None)),
             otunnel_health_url: Arc::new(Mutex::new(None)),
             otunnel_health_url_file: Arc::new(Mutex::new(None)),
             history: Arc::new(Mutex::new(history)),
@@ -96,12 +98,21 @@ impl AppState {
         // 1. Close RPC stdin first so well-behaved Pi children can observe EOF.
         self.running_workspace_stdins.lock().clear();
 
-        // 2. Terminate only processes owned/tracked by this application. The
-        // platform-neutral sysinfo implementation avoids blocking shell commands.
-        if let Some(pid) = self.otunnel_pid.lock().take() {
+        // 2. Terminate only the otunnel process actually spawned by this
+        // application. A daemon merely discovered by PID may be an independent
+        // control tunnel and must survive TunnelDock restarts.
+        if let Some(pid) = self.otunnel_owned_pid.lock().take() {
             let _ = kill_process_tree(pid);
+            let mut known_pid = self.otunnel_pid.lock();
+            if *known_pid == Some(pid) {
+                *known_pid = None;
+            }
+            drop(known_pid);
+            self.clear_otunnel_runtime();
+        } else {
+            self.otunnel_pid.lock().take();
+            self.forget_otunnel_runtime();
         }
-        self.clear_otunnel_runtime();
 
         let pids: Vec<u32> = self
             .running_workspace_pids
@@ -120,6 +131,8 @@ impl AppState {
             w.status = "stopped".to_string();
             w.pid = None;
             w.session_id = None;
+            w.binding_count = 0;
+            w.error_message = None;
         }
         drop(list);
         self.save_workspaces();
@@ -185,6 +198,11 @@ impl AppState {
         }
     }
 
+    pub fn forget_otunnel_runtime(&self) {
+        self.otunnel_health_url.lock().take();
+        self.otunnel_health_url_file.lock().take();
+    }
+
     pub fn clear_otunnel_runtime(&self) {
         self.otunnel_health_url.lock().take();
         if let Some(path) = self.otunnel_health_url_file.lock().take() {
@@ -211,6 +229,8 @@ impl AppState {
                         w.status = "stopped".to_string();
                         w.pid = None;
                         w.session_id = None;
+                        w.binding_count = 0;
+                        w.error_message = None;
                         w
                     })
                     .collect();
