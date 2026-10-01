@@ -18,6 +18,18 @@ export const MemorySection: React.FC<Props> = ({
 }) => {
   const { t } = useTranslation();
 
+  const editors: Array<[keyof ProjectMemory, string, number]> = [
+    ["project_state", t("project_rooms.project_state"), 12],
+    ["session_handoff", t("project_rooms.session_handoff"), 8],
+    ["model_design", t("project_rooms.model_design"), 11],
+    ["data_catalog", t("project_rooms.data_catalog"), 11],
+    ["experiments", t("project_rooms.memory_experiments"), 10],
+    ["results", t("project_rooms.results"), 10],
+    ["references", t("project_rooms.references"), 9],
+    ["documents", t("project_rooms.documents"), 9],
+    ["decisions", t("project_rooms.decisions"), 8],
+  ];
+
   return (
     <div className="rounded-xl border border-zinc-800 bg-dark-card p-5 space-y-4">
       <div className="flex items-center justify-between">
@@ -25,7 +37,7 @@ export const MemorySection: React.FC<Props> = ({
           <h4 className="text-sm font-semibold text-zinc-200">
             {t("project_rooms.memory_title")}
           </h4>
-          <p className="mt-1 text-[11px] text-zinc-500">
+          <p className="mt-1 max-w-3xl text-[11px] text-zinc-500">
             {t("project_rooms.memory_desc")}
           </p>
         </div>
@@ -40,14 +52,7 @@ export const MemorySection: React.FC<Props> = ({
         </button>
       </div>
 
-      {(
-        [
-          ["project_state", t("project_rooms.project_state"), 14],
-          ["session_handoff", t("project_rooms.session_handoff"), 8],
-          ["decisions", t("project_rooms.decisions"), 10],
-          ["experiments", t("project_rooms.memory_experiments"), 10],
-        ] as Array<[keyof ProjectMemory, string, number]>
-      ).map(([key, label, rows]) => (
+      {editors.map(([key, label, rows]) => (
         <label key={key} className="block space-y-1.5">
           <span className="text-[11px] font-medium text-zinc-400">{label}</span>
           <textarea
@@ -63,6 +68,15 @@ export const MemorySection: React.FC<Props> = ({
           />
         </label>
       ))}
+
+      <details className="rounded-lg border border-zinc-800 bg-zinc-950/60">
+        <summary className="cursor-pointer px-3 py-2 text-[11px] text-zinc-500">
+          {t("project_rooms.memory_index")}
+        </summary>
+        <pre className="border-t border-zinc-800 px-3 py-3 whitespace-pre-wrap text-[10px] leading-relaxed text-zinc-500">
+          {draft.memory_index}
+        </pre>
+      </details>
 
       <details className="rounded-lg border border-zinc-800 bg-zinc-950/60">
         <summary className="cursor-pointer px-3 py-2 text-[11px] text-zinc-500">

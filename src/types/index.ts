@@ -99,10 +99,16 @@ export interface AgentCapacity {
 }
 
 export interface ProjectMemory {
+  memory_index: string;
   project_state: string;
   session_handoff: string;
   decisions: string;
+  model_design: string;
+  data_catalog: string;
   experiments: string;
+  results: string;
+  references: string;
+  documents: string;
   memory_protocol: string;
   updated_at: string;
 }
@@ -120,6 +126,7 @@ export interface ProjectTask {
   thread_id: string;
   consultation_id: string;
   web_reviewed: boolean;
+  memory_committed: boolean;
   auto_dispatch: boolean;
   created_at: string;
   updated_at: string;

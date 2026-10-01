@@ -146,10 +146,22 @@ pub struct AgentCapacity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectMemory {
+    #[serde(default)]
+    pub memory_index: String,
     pub project_state: String,
     pub session_handoff: String,
     pub decisions: String,
+    #[serde(default)]
+    pub model_design: String,
+    #[serde(default)]
+    pub data_catalog: String,
     pub experiments: String,
+    #[serde(default)]
+    pub results: String,
+    #[serde(default)]
+    pub references: String,
+    #[serde(default)]
+    pub documents: String,
     pub memory_protocol: String,
     pub updated_at: String,
 }
@@ -176,6 +188,8 @@ pub struct ProjectTask {
     pub consultation_id: String,
     #[serde(default)]
     pub web_reviewed: bool,
+    #[serde(default)]
+    pub memory_committed: bool,
     #[serde(default)]
     pub auto_dispatch: bool,
     pub created_at: String,
@@ -390,6 +404,7 @@ mod tests {
         assert!(task.thread_id.is_empty());
         assert!(task.consultation_id.is_empty());
         assert!(!task.web_reviewed);
+        assert!(!task.memory_committed);
         assert!(!task.auto_dispatch);
 
         let config: ProjectRoomConfig = serde_json::from_str(

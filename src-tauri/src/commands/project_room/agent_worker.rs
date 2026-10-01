@@ -123,7 +123,7 @@ Research rules:
 - Never import assumptions from another Project Room.
 - Reviewer(s): {reviewers}
 
-Before editing, read the Project Room snapshot, Constitution, PROJECT_STATE.md, SESSION_HANDOFF.md, and relevant project instructions (AGENTS.md/README).
+Before editing/reviewing, read the Project Room snapshot, Constitution, MEMORY_INDEX.md, PROJECT_STATE.md, SESSION_HANDOFF.md, and the relevant domain memory named by MEMORY_INDEX.md (MODEL_DESIGN / DATA_CATALOG / EXPERIMENTS / RESULTS / REFERENCES / DOCUMENTS / DECISIONS), plus project instructions (AGENTS.md/README) needed by the task.
 If the task is underspecified or conflicts with current evidence, state the conflict instead of inventing a design.
 After implementation, run the smallest sufficient correctness checks.
 {response_rule}

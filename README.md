@@ -42,7 +42,7 @@
 | --- | --- |
 | **环境检测与安装** | 自动探测 8 项本机依赖（Node ≥ 26 / npm / Git / Rust / cargo-binstall / otunnel / Pi / Chappie），逐项展示状态与版本，支持单项或「自动安装全部缺失组件」，安装日志实时流式输出 |
 | **工作区与 Session** | 添加本地项目工作区（自动探测 Git 分支与未提交变更），管理 Pi Session 生命周期（启动 / 停止 / 重启），一键生成 ChatGPT 项目绑定提示词 |
-| **科研 Project Rooms** | 将 Point Tracking / IQA Agent / 3D+MLLM 作为彼此隔离的科研控制面；每个项目持久绑定原有 Codex Desktop Thread 与 Antigravity Cascade，并维护独立的本地/服务器映射、任务、讨论、实验与额度遥测；网页 ChatGPT 可通过 `consult.request` 自动向两条长期 Agent 对话发起只读短回合咨询，并只读取压缩后的协调快照 |
+| **科研 Project Rooms** | 将 Point Tracking / IQA Agent / 3D+MLLM 作为彼此隔离的科研控制面；每个项目持久绑定原有 Codex Desktop Thread 与 Antigravity Cascade，并维护独立的本地/服务器映射、任务、讨论、实验与额度遥测；模型/数据/实验/结果/引用/文档使用 canonical `.project_memory` 组织，网页 ChatGPT 通过 consultation barrier 等齐 Agent review，自己复核后必须更新 canonical memory 并通过 `memory.commit` 才能最终收敛 |
 | **健康度与 Doctor 诊断** | 实时展示 otunnel 守护进程状态、健康探针与网络延迟；一键 Doctor 深度体检（配置、Tunnel ID、凭据、MCP 可达性、控制面连接等 8 项），失败项附中文修复建议 |
 | **MCP 调用审计** | 全量记录 ChatGPT 发起的工具调用（工具名 / 参数 / 结果摘要 / 耗时 / 状态），全文搜索、按类型与状态筛选、统计卡片（调用数 / 成功率 / 平均耗时）、单条详情查看与 JSON 导出 |
 | **凭据与设置** | 编辑 Tunnel ID、OpenAI Restricted API Key、健康探针端口，保存后自动同步至 `~/.chappie/` |
@@ -123,6 +123,7 @@ npm run tauri build
 
 更完整的实践与故障排查，参见 [docs/OpenAI Tunnel + Chappie + Pi.md](docs/OpenAI%20Tunnel%20%2B%20Chappie%20%2B%20Pi.md)。
 关于系统设计、通信协议与底层核心原理解析，参见 [docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md](docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md)。
+Project Room 的持久化科研记忆、数据/实验/结果/模型/引用组织与三 Agent review/finalization 规则，参见 [docs/PROJECT_ROOM_MEMORY_ARCHITECTURE.md](docs/PROJECT_ROOM_MEMORY_ARCHITECTURE.md)。
 
 ## 配置文件
 
@@ -131,7 +132,7 @@ npm run tauri build
 | `~/.chappie/tunnelkey.txt` | OpenAI Restricted API Key（控制面凭据） |
 | `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认由系统自动分配空闲端口）、MCP 目标（独立 `chappie` CLI） |
 | 系统数据目录下的 `TunnelDock/` | 工作区列表、非敏感应用设置、MCP 调用历史，以及 Project Room 的 operational state（任务 / 讨论 / 实验 / quota telemetry） |
-| `<project>/.project_memory/` | 每个科研项目唯一的持久化科研记忆：`PROJECT_STATE.md` / `SESSION_HANDOFF.md` / `DECISIONS.md` / `EXPERIMENTS.md` / `MEMORY_PROTOCOL.md` |
+| `<project>/.project_memory/` | 每个科研项目唯一的 canonical 持久化科研记忆：`MEMORY_INDEX.md` / `PROJECT_STATE.md` / `SESSION_HANDOFF.md` / `MODEL_DESIGN.md` / `DATA_CATALOG.md` / `EXPERIMENTS.md` / `RESULTS.md` / `REFERENCES.md` / `DOCUMENTS.md` / `DECISIONS.md` / `MEMORY_PROTOCOL.md`；大数据、checkpoint、日志、PDF、图表本体不复制进这里，只记录稳定路径/version/hash/provenance |
 | `<project>/.tunneldock/` | 自动生成的 Project Room bridge、网页轻量 `web_context.json`、`CONSTITUTION.md` 与 `inbox/` 消息总线；ChatGPT / Codex / Antigravity 通过它共享任务、短咨询、讨论、handoff 与实验记录 |
 
 从旧版 `local-mcp-console/` 或更早的 `chappie-desktop/` 升级时，TunnelDock 会在首次启动时自动迁移上述应用数据；`~/.chappie/` 属于 Chappie/otunnel 兼容配置，不会随产品品牌改名。
