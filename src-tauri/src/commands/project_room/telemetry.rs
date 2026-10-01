@@ -1,8 +1,33 @@
 use super::*;
 
 pub(super) fn command_version(executable: &Path, args: &[&str]) -> Option<String> {
-    let mut command = Command::new(executable);
-    command.args(args);
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let extension = executable
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(extension.as_str(), "cmd" | "bat") {
+            let mut command = Command::new("cmd.exe");
+            command.args(["/d", "/s", "/c"]);
+            command.arg(executable);
+            command.args(args);
+            command
+        } else {
+            let mut command = Command::new(executable);
+            command.args(args);
+            command
+        }
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut command = Command::new(executable);
+        command.args(args);
+        command
+    };
+
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     #[cfg(target_os = "windows")]
@@ -49,25 +74,33 @@ pub(super) fn find_codex_executable() -> Option<PathBuf> {
 }
 
 pub(super) fn find_antigravity_executable() -> Option<PathBuf> {
+    // TunnelDock integrates the Antigravity Agent/Agent Manager through its
+    // dedicated `chat --mode agent` CLI. A bare GUI executable is not enough:
+    // editor/manager installs without the chat CLI must not be treated as a
+    // dispatchable research worker.
     if let Some(path) = find_executable("antigravity") {
-        return Some(PathBuf::from(path));
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            return Some(candidate);
+        }
     }
 
     #[cfg(target_os = "windows")]
     {
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let path = PathBuf::from(local)
-                .join("Programs")
-                .join("antigravity")
-                .join("Antigravity.exe");
-            if path.exists() {
-                return Some(path);
-            }
+        let portable_cli = PathBuf::from(r"D:\Antigravity\Antigravity\bin\antigravity.cmd");
+        if portable_cli.exists() {
+            return Some(portable_cli);
         }
 
-        let portable = PathBuf::from(r"D:\Antigravity\Antigravity\Antigravity.exe");
-        if portable.exists() {
-            return Some(portable);
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let local_cli = PathBuf::from(local)
+                .join("Programs")
+                .join("antigravity")
+                .join("bin")
+                .join("antigravity.cmd");
+            if local_cli.exists() {
+                return Some(local_cli);
+            }
         }
     }
 
@@ -439,9 +472,9 @@ pub(super) fn agent_runtimes() -> Vec<AgentRuntimeInfo> {
             version: antigravity
                 .as_ref()
                 .and_then(|path| command_version(path, &["--version"])),
-            dispatch_mode: "interactive_chat".to_string(),
+            dispatch_mode: "agent_session".to_string(),
             notes:
-                "Antigravity 打开项目专属 agent chat；视觉/探索任务优先，核心代码需 Codex review。"
+                "Antigravity Agent / Agent Manager 使用 chat --mode agent 接收项目任务；不依赖 IDE。视觉/探索任务优先，核心代码需 Codex review。"
                     .to_string(),
         },
     ]

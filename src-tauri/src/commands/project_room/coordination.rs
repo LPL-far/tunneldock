@@ -17,7 +17,7 @@ This project is optimized for top-conference research, not product feature accum
 ## Default agent roles
 - ChatGPT: coordinator, research lead, experiment interpreter, final reviewer, and quota-allocation brain.
 - Codex: primary engineer for robust implementation, refactoring, tests, and code correctness.
-- Antigravity / Gemini: visualization, UI, PCA/video/figure work, rapid exploration, and visual result inspection.
+- Antigravity Agent / Gemini: Agent Manager session for visualization, UI, PCA/video/figure work, rapid exploration, and visual result inspection; no IDE dependency.
 
 ## Review rules
 - Gemini modifications to core model/training/data code require Codex review before acceptance.

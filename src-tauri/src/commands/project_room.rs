@@ -133,7 +133,7 @@ fn default_agents() -> Vec<ProjectAgentPolicy> {
         },
         ProjectAgentPolicy {
             agent_id: "gemini".to_string(),
-            display_name: "Antigravity / Gemini".to_string(),
+            display_name: "Antigravity Agent / Gemini".to_string(),
             role: "Visual + Exploration Agent".to_string(),
             strengths: vec![
                 "PCA、图表、视频与论文 case 可视化".to_string(),
@@ -1116,7 +1116,7 @@ Research operating rules:
 - Refine project memory after meaningful decisions/results instead of appending raw chat logs.
 - ChatGPT is the coordinator and quota-allocation brain.
 - Codex is the primary robust engineer.
-- Antigravity/Gemini is the visual/exploration agent; core-code changes require Codex review.
+- Antigravity Agent/Gemini is the visual/exploration agent; core-code changes require Codex review. It is integrated as an Agent Manager session, not as an IDE workspace.
 - Important Codex algorithm changes require ChatGPT methodological review.
 - You and the other agents may discuss and challenge each other; I remain the final decision maker.
 
@@ -1162,7 +1162,7 @@ TunnelDock workspace ID：{workspace}
 - 重要决策/结果发生后要提炼更新项目记忆，而不是无限追加聊天记录。
 - ChatGPT 负责科研规划、任务拆解、额度综合调配、实验解释和最终 review。
 - Codex 是稳健实现的主工程 Agent。
-- Antigravity/Gemini 负责视觉、PCA/图表/视频/UI 和快速探索；涉及核心代码默认需要 Codex review。
+- Antigravity Agent/Gemini 负责视觉、PCA/图表/视频/UI 和快速探索；这里接入的是 Agent Manager 会话，不依赖 IDE；涉及核心代码默认需要 Codex review。
 - Codex 的重要算法改动需要 ChatGPT 做科研意图和方法一致性 review。
 - 三个 Agent 可以互相讨论、质疑和反驳；我始终是最终研究决策者。
 
