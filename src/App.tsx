@@ -188,13 +188,14 @@ export const App: React.FC = () => {
 
   // Event Listeners for logs
   useEffect(() => {
+    let disposed = false;
     let unlistenInstall: (() => void) | undefined;
     let unlistenWs: (() => void) | undefined;
     let unlistenAudit: (() => void) | undefined;
 
     const setupListeners = async () => {
       try {
-        unlistenInstall = await listen<InstallProgressEvent>(
+        const stopInstall = await listen<InstallProgressEvent>(
           "install-log",
           (event) => {
             setTerminalLogs((prev) => [
@@ -203,8 +204,13 @@ export const App: React.FC = () => {
             ]);
           }
         );
+        if (disposed) {
+          stopInstall();
+        } else {
+          unlistenInstall = stopInstall;
+        }
 
-        unlistenWs = await listen<{
+        const stopWs = await listen<{
           workspace_id: string;
           line: string;
           is_error: boolean;
@@ -214,21 +220,32 @@ export const App: React.FC = () => {
             { line: event.payload.line, is_error: event.payload.is_error },
           ]);
         });
+        if (disposed) {
+          stopWs();
+        } else {
+          unlistenWs = stopWs;
+        }
 
-        unlistenAudit = await listen("audit-updated", () => {
+        const stopAudit = await listen("audit-updated", () => {
           void loadHistoryData();
         });
+        if (disposed) {
+          stopAudit();
+        } else {
+          unlistenAudit = stopAudit;
+        }
       } catch (e) {
         console.warn("Tauri event listener registration skipped or failed:", e);
       }
     };
 
-    setupListeners();
+    void setupListeners();
 
     return () => {
-      if (unlistenInstall) unlistenInstall();
-      if (unlistenWs) unlistenWs();
-      if (unlistenAudit) unlistenAudit();
+      disposed = true;
+      unlistenInstall?.();
+      unlistenWs?.();
+      unlistenAudit?.();
     };
   }, [loadHistoryData]);
 
