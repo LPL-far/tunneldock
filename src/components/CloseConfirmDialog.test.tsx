@@ -6,7 +6,7 @@ import { I18nProvider } from "../i18n";
 describe("CloseConfirmDialog", () => {
   it("renders an accessible themed choice between tray and exit", () => {
     const closedMarkup = renderToStaticMarkup(
-      <I18nProvider>
+      <I18nProvider initialLocale="zh-CN">
         <CloseConfirmDialog
           open={false}
           busy={false}
@@ -16,7 +16,7 @@ describe("CloseConfirmDialog", () => {
       </I18nProvider>
     );
     const openMarkup = renderToStaticMarkup(
-      <I18nProvider>
+      <I18nProvider initialLocale="zh-CN">
         <CloseConfirmDialog
           open
           busy={false}
@@ -36,7 +36,7 @@ describe("CloseConfirmDialog", () => {
 
   it("shows action-neutral progress while resolving the choice", () => {
     const markup = renderToStaticMarkup(
-      <I18nProvider>
+      <I18nProvider initialLocale="zh-CN">
         <CloseConfirmDialog
           open
           busy

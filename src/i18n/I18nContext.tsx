@@ -61,8 +61,13 @@ function resolveNestedKey(obj: any, path: string): string | undefined {
   return typeof current === "string" ? current : undefined;
 }
 
-export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [locale, setLocaleState] = useState<Locale>(detectDefaultLocale);
+export const I18nProvider: React.FC<{
+  children: ReactNode;
+  initialLocale?: Locale;
+}> = ({ children, initialLocale }) => {
+  const [locale, setLocaleState] = useState<Locale>(
+    () => initialLocale ?? detectDefaultLocale()
+  );
 
   // Sync with document element lang
   useEffect(() => {
