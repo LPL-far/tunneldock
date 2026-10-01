@@ -23,8 +23,8 @@ export const ProjectRoomList: React.FC<Props> = ({
   const { t } = useTranslation();
 
   return (
-    <div className="sticky top-4 space-y-2">
-      <div className="mb-3 flex items-center justify-between px-1">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-2 lg:sticky lg:top-4 lg:block lg:space-y-2">
+      <div className="col-span-full mb-1 flex items-center justify-between px-1 lg:mb-3">
         <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">
           {t("project_rooms.project_list")}
         </span>

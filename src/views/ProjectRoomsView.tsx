@@ -434,8 +434,8 @@ export const ProjectRoomsView: React.FC = () => {
   ];
 
   return (
-    <div className="mx-auto max-w-[1580px] space-y-5 p-5">
-      <div className="flex items-center justify-between gap-4 rounded-2xl border border-zinc-800/80 bg-gradient-to-r from-zinc-900/60 via-dark-card to-zinc-950/40 px-4 py-3.5">
+    <div className="w-full space-y-4 p-4 xl:space-y-5 xl:p-5 2xl:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-800/80 bg-gradient-to-r from-zinc-900/60 via-dark-card to-zinc-950/40 px-4 py-3.5">
         <div className="min-w-0">
           <div className="flex items-center gap-2.5">
             <div className="rounded-lg border border-emerald-900/50 bg-emerald-950/20 p-2">
@@ -486,7 +486,7 @@ export const ProjectRoomsView: React.FC = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-[260px_minmax(0,1fr)] items-start gap-5">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[clamp(230px,19vw,320px)_minmax(0,1fr)] xl:gap-5">
         <ProjectRoomList
           summaries={summaries}
           selectedId={selectedId}

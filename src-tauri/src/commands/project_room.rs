@@ -1,7 +1,7 @@
 use crate::models::{
-    AgentCapacity, AgentRun, AgentRuntimeInfo, HygieneCandidate, ProjectAgentPolicy,
-    ProjectDiscussionMessage, ProjectExperiment, ProjectMemory, ProjectRemote, ProjectRoomConfig,
-    ProjectRoomSnapshot, ProjectRoomSummary, ProjectTask,
+    AgentCapacity, AgentQuotaWindow, AgentRun, AgentRuntimeInfo, HygieneCandidate,
+    ProjectAgentPolicy, ProjectDiscussionMessage, ProjectExperiment, ProjectMemory, ProjectRemote,
+    ProjectRoomConfig, ProjectRoomSnapshot, ProjectRoomSummary, ProjectTask,
 };
 use crate::state::AppState;
 use crate::utils::chappie_broker;
@@ -163,6 +163,7 @@ fn default_capacities() -> Vec<AgentCapacity> {
             source: "unavailable".to_string(),
             confidence: "unavailable".to_string(),
             updated_at: local_now_rfc3339(),
+            quota_windows: Vec::new(),
         })
         .collect()
 }
@@ -1445,12 +1446,16 @@ mod tests {
                         "displayName": "Gemini Models",
                         "buckets": [
                             {
+                                "bucketId": "gemini-weekly",
                                 "displayName": "Weekly Limit Remaining",
+                                "window": "weekly",
                                 "remainingFraction": 0.19,
                                 "resetTime": "2026-10-02T01:15:23Z"
                             },
                             {
+                                "bucketId": "gemini-5h",
                                 "displayName": "Five Hour Limit Remaining",
+                                "window": "5h",
                                 "remainingFraction": 1.0,
                                 "resetTime": "2026-10-01T12:26:15Z"
                             }
@@ -1464,11 +1469,16 @@ mod tests {
             }
         });
 
-        let (remaining, reset, group) =
+        let (remaining, reset, group, windows) =
             parse_antigravity_quota_summary(&value).expect("Gemini quota should parse");
         assert!((remaining - 19.0).abs() < f64::EPSILON);
         assert_eq!(reset.as_deref(), Some("2026-10-02T01:15:23Z"));
         assert_eq!(group.as_deref(), Some("Gemini Models"));
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].window, "weekly");
+        assert_eq!(windows[1].window, "5h");
+        assert!((windows[0].remaining_percent - 19.0).abs() < f64::EPSILON);
+        assert!((windows[1].remaining_percent - 100.0).abs() < f64::EPSILON);
     }
 
     #[test]

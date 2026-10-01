@@ -78,6 +78,14 @@ export interface ProjectAgentPolicy {
   enabled: boolean;
 }
 
+export interface AgentQuotaWindow {
+  id: string;
+  label: string;
+  window: string;
+  remaining_percent: number;
+  reset_at: string | null;
+}
+
 export interface AgentCapacity {
   agent_id: string;
   available: boolean;
@@ -87,6 +95,7 @@ export interface AgentCapacity {
   source: string;
   confidence: string;
   updated_at: string;
+  quota_windows: AgentQuotaWindow[];
 }
 
 export interface ProjectMemory {

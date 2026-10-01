@@ -32,13 +32,28 @@ const capacityLabel = (
   return `${Math.round(capacity.remaining_percent)}%`;
 };
 
-const capacityTone = (capacity: AgentCapacity | undefined) => {
-  if (!capacity || capacity.remaining_percent == null) {
-    return "bg-zinc-700";
-  }
-  if (capacity.remaining_percent <= 10) return "bg-rose-500";
-  if (capacity.remaining_percent <= 25) return "bg-amber-400";
+const percentTone = (remaining: number | null | undefined) => {
+  if (remaining == null) return "bg-zinc-700";
+  if (remaining <= 10) return "bg-rose-500";
+  if (remaining <= 25) return "bg-amber-400";
   return "bg-emerald-500";
+};
+
+const capacityTone = (capacity: AgentCapacity | undefined) =>
+  percentTone(capacity?.remaining_percent);
+
+const quotaWindowLabel = (
+  window: AgentCapacity["quota_windows"][number],
+  t: Translate
+) => {
+  const key = window.window.toLowerCase();
+  if (key === "5h" || window.id.toLowerCase().includes("5h")) {
+    return t("project_rooms.quota_5h");
+  }
+  if (key === "weekly" || window.id.toLowerCase().includes("weekly")) {
+    return t("project_rooms.quota_total");
+  }
+  return window.label;
 };
 
 const telemetryTone = (capacity: AgentCapacity | undefined) => {
@@ -77,6 +92,24 @@ export const ProjectRoomHeader: React.FC<Props> = ({
       room.agents.flatMap((agent) => {
         const capacity = capacities.get(agent.agent_id);
         if (!capacity) return [];
+
+        const lowWindows = capacity.quota_windows.filter(
+          (window) => window.remaining_percent <= 25
+        );
+        if (lowWindows.length > 0) {
+          return lowWindows.map((window) => ({
+            id: `${agent.agent_id}-${window.id}-low`,
+            agent: agent.display_name,
+            text: `${quotaWindowLabel(window, t)} · ${t(
+              "project_rooms.quota_remaining",
+              { percent: Math.round(window.remaining_percent) }
+            )}`,
+            tone:
+              window.remaining_percent <= 10
+                ? "text-rose-300"
+                : "text-amber-300",
+          }));
+        }
 
         if (
           capacity.remaining_percent != null &&
@@ -226,7 +259,10 @@ export const ProjectRoomHeader: React.FC<Props> = ({
         </div>
       )}
 
-      <div className="grid grid-cols-3 divide-x divide-zinc-800/80">
+      <div
+        className="grid gap-px bg-zinc-800/80"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}
+      >
         {room.agents.map((agent) => {
           const capacity = capacities.get(agent.agent_id);
           const runtime = runtimeMap.get(agent.agent_id);
@@ -238,11 +274,26 @@ export const ProjectRoomHeader: React.FC<Props> = ({
               ? Wrench
               : Sparkles;
           const remaining = capacity?.remaining_percent;
+          const quotaWindows = [...(capacity?.quota_windows ?? [])].sort(
+            (left, right) => {
+              const score = (value: string) => {
+                const normalized = value.toLowerCase();
+                if (normalized === "5h" || normalized.includes("5h")) return 0;
+                if (
+                  normalized === "weekly" ||
+                  normalized.includes("weekly")
+                )
+                  return 1;
+                return 2;
+              };
+              return score(left.window || left.id) - score(right.window || right.id);
+            }
+          );
 
           return (
             <div
               key={agent.agent_id}
-              className="min-w-0 bg-zinc-950/20 px-4 py-4 transition-colors hover:bg-zinc-900/30"
+              className="min-w-0 bg-zinc-950/80 px-4 py-4 transition-colors hover:bg-zinc-900/70"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-start gap-2.5">
@@ -264,7 +315,9 @@ export const ProjectRoomHeader: React.FC<Props> = ({
                   </div>
                   <div
                     className={`mt-0.5 text-[9px] font-medium tabular-nums ${telemetryClass}`}
-                    title={`${capacity?.source || "no telemetry"} / ${capacity?.confidence || "unknown"}`}
+                    title={`${capacity?.source || "no telemetry"} / ${
+                      capacity?.confidence || "unknown"
+                    }`}
                   >
                     {capacity?.updated_at
                       ? `${t("project_rooms.telemetry_updated")} ${formatTime(
@@ -275,16 +328,73 @@ export const ProjectRoomHeader: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-800/80">
-                {remaining != null && (
-                  <div
-                    className={`h-full rounded-full transition-all ${capacityTone(
-                      capacity
-                    )}`}
-                    style={{ width: `${Math.max(2, Math.min(100, remaining))}%` }}
-                  />
-                )}
-              </div>
+              {quotaWindows.length > 0 ? (
+                <div className="mt-3 space-y-2.5">
+                  {quotaWindows.map((window) => {
+                    const label = quotaWindowLabel(window, t);
+                    const isLimiting =
+                      remaining != null &&
+                      Math.abs(window.remaining_percent - remaining) < 0.001;
+                    return (
+                      <div
+                        key={window.id}
+                        className="rounded-lg border border-zinc-800/80 bg-zinc-950/70 px-3 py-2.5"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate text-[10px] font-medium text-zinc-300">
+                                {label}
+                              </span>
+                              {isLimiting && (
+                                <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[8px] font-medium text-amber-300">
+                                  {t("project_rooms.quota_limiting")}
+                                </span>
+                              )}
+                            </div>
+                            {window.reset_at && (
+                              <div className="mt-0.5 text-[9px] font-mono text-zinc-600">
+                                {t("project_rooms.quota_resets", {
+                                  time: formatTime(window.reset_at) || "—",
+                                })}
+                              </div>
+                            )}
+                          </div>
+                          <span className="shrink-0 text-sm font-semibold tabular-nums text-zinc-100">
+                            {Math.round(window.remaining_percent)}%
+                          </span>
+                        </div>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                          <div
+                            className={`h-full rounded-full transition-all ${percentTone(
+                              window.remaining_percent
+                            )}`}
+                            style={{
+                              width: `${Math.max(
+                                2,
+                                Math.min(100, window.remaining_percent)
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-800/80">
+                  {remaining != null && (
+                    <div
+                      className={`h-full rounded-full transition-all ${capacityTone(
+                        capacity
+                      )}`}
+                      style={{
+                        width: `${Math.max(2, Math.min(100, remaining))}%`,
+                      }}
+                    />
+                  )}
+                </div>
+              )}
 
               <div className="mt-2.5 flex min-h-4 flex-wrap items-center gap-x-3 gap-y-1 text-[9px] font-mono text-zinc-600">
                 <span
@@ -301,13 +411,12 @@ export const ProjectRoomHeader: React.FC<Props> = ({
                     t("project_rooms.runtime_unavailable")
                   )}
                 </span>
-                {capacity?.reset_at && (
+                {quotaWindows.length === 0 && capacity?.reset_at && (
                   <span className="inline-flex items-center gap-1">
                     <Clock3 className="h-3 w-3" />
                     {formatTime(capacity.reset_at)}
                   </span>
                 )}
-
               </div>
 
               <div className="mt-2.5 line-clamp-2 text-[10px] leading-relaxed text-zinc-500">

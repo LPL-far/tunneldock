@@ -122,6 +122,15 @@ pub struct ProjectAgentPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentQuotaWindow {
+    pub id: String,
+    pub label: String,
+    pub window: String,
+    pub remaining_percent: f64,
+    pub reset_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentCapacity {
     pub agent_id: String,
     pub available: bool,
@@ -131,6 +140,8 @@ pub struct AgentCapacity {
     pub source: String,
     pub confidence: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub quota_windows: Vec<AgentQuotaWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -276,7 +287,7 @@ pub struct CommandOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpCallRecord, TunnelSettings, WorkspaceItem};
+    use super::{AgentCapacity, McpCallRecord, TunnelSettings, WorkspaceItem};
 
     #[test]
     fn old_history_records_default_workspace_identity_and_tokens() {
@@ -320,6 +331,24 @@ mod tests {
             serde_json::from_str(legacy).expect("legacy workspace should still load");
 
         assert_eq!(workspace.binding_count, 0);
+    }
+
+    #[test]
+    fn legacy_agent_capacity_without_quota_windows_defaults_empty() {
+        let legacy = r#"{
+            "agent_id":"gemini",
+            "available":true,
+            "remaining_percent":19.0,
+            "reset_at":"2026-10-02T01:15:23Z",
+            "model":"Gemini Models",
+            "source":"antigravity_quota_summary",
+            "confidence":"runtime_telemetry",
+            "updated_at":"2026-10-01T18:00:00+08:00"
+        }"#;
+
+        let capacity: AgentCapacity =
+            serde_json::from_str(legacy).expect("legacy capacity should still load");
+        assert!(capacity.quota_windows.is_empty());
     }
 
     #[test]

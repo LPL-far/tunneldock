@@ -14,10 +14,10 @@
     "windows": [
       {
         "title": "TunnelDock — OpenAI Tunnel & Pi Workspace",
-        "width": 1260,
-        "height": 840,
-        "minWidth": 1050,
-        "minHeight": 680,
+        "width": 1380,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 640,
         "center": true,
         "resizable": true,
         "fullscreen": false,

@@ -167,9 +167,11 @@ pub(super) fn listening_ports_for_pid(pid: u32) -> Vec<u16> {
     ports
 }
 
+type AntigravityQuotaSummary = (f64, Option<String>, Option<String>, Vec<AgentQuotaWindow>);
+
 pub(super) fn parse_antigravity_quota_summary(
     value: &serde_json::Value,
-) -> Option<(f64, Option<String>, Option<String>)> {
+) -> Option<AntigravityQuotaSummary> {
     let groups = value.get("response")?.get("groups")?.as_array()?;
     let group = groups.iter().find(|group| {
         group
@@ -180,7 +182,7 @@ pub(super) fn parse_antigravity_quota_summary(
     })?;
     let buckets = group.get("buckets")?.as_array()?;
 
-    let (remaining, bucket) = buckets
+    let quota_windows = buckets
         .iter()
         .filter(|bucket| {
             !bucket
@@ -192,22 +194,45 @@ pub(super) fn parse_antigravity_quota_summary(
             let remaining = bucket
                 .get("remainingFraction")
                 .and_then(serde_json::Value::as_f64)?;
-            Some((remaining, bucket))
+            Some(AgentQuotaWindow {
+                id: bucket
+                    .get("bucketId")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("quota")
+                    .to_string(),
+                label: bucket
+                    .get("displayName")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("Quota")
+                    .to_string(),
+                window: bucket
+                    .get("window")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                remaining_percent: (remaining * 100.0).clamp(0.0, 100.0),
+                reset_at: bucket
+                    .get("resetTime")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+            })
         })
-        .min_by(|(left, _), (right, _)| {
-            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
-        })?;
+        .collect::<Vec<_>>();
+
+    let limiting = quota_windows.iter().min_by(|left, right| {
+        left.remaining_percent
+            .partial_cmp(&right.remaining_percent)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })?;
 
     Some((
-        (remaining * 100.0).clamp(0.0, 100.0),
-        bucket
-            .get("resetTime")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
+        limiting.remaining_percent,
+        limiting.reset_at.clone(),
         group
             .get("displayName")
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned),
+        quota_windows,
     ))
 }
 
@@ -271,7 +296,7 @@ pub(super) fn antigravity_quota_capacity() -> Option<AgentCapacity> {
                 let Ok(value) = response.json::<serde_json::Value>() else {
                     continue;
                 };
-                let Some((remaining_percent, reset_at, model)) =
+                let Some((remaining_percent, reset_at, model, quota_windows)) =
                     parse_antigravity_quota_summary(&value)
                 else {
                     continue;
@@ -286,6 +311,7 @@ pub(super) fn antigravity_quota_capacity() -> Option<AgentCapacity> {
                     source: "antigravity_quota_summary".to_string(),
                     confidence: "runtime_telemetry".to_string(),
                     updated_at: local_now_rfc3339(),
+                    quota_windows,
                 });
             }
         }
@@ -434,6 +460,7 @@ pub(super) fn live_codex_capacity(executable: &Path) -> Option<AgentCapacity> {
         source: "codex_app_server_rate_limits".to_string(),
         confidence: "runtime_telemetry".to_string(),
         updated_at: local_now_rfc3339(),
+        quota_windows: Vec::new(),
     })
 }
 
@@ -463,6 +490,7 @@ pub(super) fn latest_codex_capacity() -> AgentCapacity {
             "unavailable".to_string()
         },
         updated_at: now,
+        quota_windows: Vec::new(),
     };
 
     let Some(home) = dirs::home_dir() else {
@@ -549,6 +577,7 @@ pub(super) fn current_agent_capacities() -> Vec<AgentCapacity> {
             "unavailable".to_string()
         },
         updated_at: now.clone(),
+        quota_windows: Vec::new(),
     });
 
     vec![
@@ -561,6 +590,7 @@ pub(super) fn current_agent_capacities() -> Vec<AgentCapacity> {
             source: "web_coordinator".to_string(),
             confidence: "quota_unavailable".to_string(),
             updated_at: now,
+            quota_windows: Vec::new(),
         },
         codex_capacity,
         gemini_capacity,
