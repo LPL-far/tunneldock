@@ -65,6 +65,67 @@ fn create_health_url_file_path(state: &AppState) -> Result<PathBuf, String> {
     )))
 }
 
+fn saved_health_url_candidates(runtime_dir: &Path) -> Vec<(PathBuf, String)> {
+    let Ok(entries) = fs::read_dir(runtime_dir) else {
+        return Vec::new();
+    };
+
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("otunnel-health-") && name.ends_with(".url"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+
+    paths.sort_by(|left, right| {
+        let left_modified = fs::metadata(left)
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(UNIX_EPOCH);
+        let right_modified = fs::metadata(right)
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(UNIX_EPOCH);
+        right_modified.cmp(&left_modified)
+    });
+
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            read_health_base_url(&path)
+                .ok()
+                .map(|(base_url, _)| (path, base_url))
+        })
+        .collect()
+}
+
+async fn recover_runtime_health_url(
+    state: &AppState,
+    client: &reqwest::Client,
+) -> Option<String> {
+    let runtime_dir = state.app_data_dir.join("runtime");
+
+    for (path, base_url) in saved_health_url_candidates(&runtime_dir) {
+        let health_url = format!("{}/healthz", base_url.trim_end_matches('/'));
+        let healthy = client
+            .get(&health_url)
+            .send()
+            .await
+            .map(|response| response.status().is_success())
+            .unwrap_or(false);
+
+        if healthy {
+            *state.otunnel_health_url.lock() = Some(base_url.clone());
+            *state.otunnel_health_url_file.lock() = Some(path);
+            return Some(base_url);
+        }
+    }
+
+    None
+}
+
 fn tail_log(log: &str, line_count: usize) -> String {
     log.lines()
         .rev()
@@ -141,16 +202,25 @@ pub async fn get_otunnel_status(
         }
     }
 
-    let health_base_url = runtime_health_url.or_else(|| {
-        (configured_port != 0).then(|| format!("http://127.0.0.1:{}", configured_port))
-    });
-
     // Probe healthz & readyz only when the resolved address is known. Port 0 is
     // never probed directly; otunnel writes its actual address to health.url-file.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(1500))
         .build()
         .map_err(|e| e.to_string())?;
+
+    let mut health_base_url = runtime_health_url.or_else(|| {
+        (configured_port != 0).then(|| format!("http://127.0.0.1:{}", configured_port))
+    });
+
+    // After a crash or development restart the otunnel daemon may still be alive,
+    // while the new TunnelDock process has lost its in-memory health URL. Reuse a
+    // still-responsive url-file from the runtime directory instead of reporting the
+    // live daemon as unhealthy.
+    if running && configured_port == 0 && health_base_url.is_none() {
+        health_base_url = recover_runtime_health_url(&state, &client).await;
+    }
+
     let mut latency = None;
     let mut healthz_ok = false;
     let mut readyz_ok = false;
@@ -566,8 +636,25 @@ pub async fn probe_network_latency() -> Result<u64, String> {
 mod tests {
     use super::{
         format_startup_failure, normalize_active_chappie_collision, parse_health_base_url,
+        saved_health_url_candidates,
     };
     use crate::models::DoctorCheckItem;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_runtime_dir(case: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "tunneldock-otunnel-test-{}-{}-{}",
+            std::process::id(),
+            nonce,
+            case
+        ))
+    }
 
     fn doctor_item(name: &str, status: &str, details: &str) -> DoctorCheckItem {
         DoctorCheckItem {
@@ -593,6 +680,33 @@ mod tests {
             .expect_err("remote health URL should be rejected");
 
         assert!(error.contains("不是本机回环地址"));
+    }
+
+    #[test]
+    fn discovers_only_valid_saved_runtime_health_urls() {
+        let runtime_dir = temporary_runtime_dir("saved-health-url");
+        fs::create_dir_all(&runtime_dir).expect("runtime directory should be created");
+        let expected_path = runtime_dir.join("otunnel-health-123-456.url");
+
+        fs::write(&expected_path, "http://127.0.0.1:53147\n")
+            .expect("valid health URL should be written");
+        fs::write(
+            runtime_dir.join("otunnel-health-invalid.url"),
+            "https://127.0.0.1:53148\n",
+        )
+        .expect("invalid health URL should be written");
+        fs::write(
+            runtime_dir.join("unrelated.url"),
+            "http://127.0.0.1:53149\n",
+        )
+        .expect("unrelated file should be written");
+
+        let candidates = saved_health_url_candidates(&runtime_dir);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].0, expected_path);
+        assert_eq!(candidates[0].1, "http://127.0.0.1:53147");
+        fs::remove_dir_all(runtime_dir).expect("test runtime directory should be removed");
     }
 
     #[test]
