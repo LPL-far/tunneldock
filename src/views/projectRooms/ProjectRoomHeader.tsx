@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Clock3,
   Copy,
-  Gauge,
   Sparkles,
   Wrench,
 } from "lucide-react";
@@ -42,23 +41,10 @@ const capacityTone = (capacity: AgentCapacity | undefined) => {
   return "bg-emerald-500";
 };
 
-const telemetryBadge = (
-  capacity: AgentCapacity | undefined,
-  t: Translate
-) => {
-  if (!capacity) {
-    return { label: t("project_rooms.quota_no_data"), className: "text-zinc-600" };
-  }
-  if (capacity.confidence === "runtime_telemetry") {
-    return { label: t("project_rooms.quota_live"), className: "text-emerald-400" };
-  }
-  if (capacity.confidence === "stale_runtime_telemetry") {
-    return {
-      label: t("project_rooms.quota_stale_badge"),
-      className: "text-amber-400",
-    };
-  }
-  return { label: t("project_rooms.quota_no_data"), className: "text-zinc-600" };
+const telemetryTone = (capacity: AgentCapacity | undefined) => {
+  if (capacity?.confidence === "runtime_telemetry") return "text-emerald-400";
+  if (capacity?.confidence === "stale_runtime_telemetry") return "text-amber-400";
+  return "text-zinc-600";
 };
 
 interface Props {
@@ -107,17 +93,6 @@ export const ProjectRoomHeader: React.FC<Props> = ({
                 capacity.remaining_percent <= 10
                   ? "text-rose-300"
                   : "text-amber-300",
-            },
-          ];
-        }
-
-        if (capacity.confidence === "stale_runtime_telemetry") {
-          return [
-            {
-              id: `${agent.agent_id}-stale`,
-              agent: agent.display_name,
-              text: t("project_rooms.quota_stale"),
-              tone: "text-amber-300",
             },
           ];
         }
@@ -255,7 +230,7 @@ export const ProjectRoomHeader: React.FC<Props> = ({
         {room.agents.map((agent) => {
           const capacity = capacities.get(agent.agent_id);
           const runtime = runtimeMap.get(agent.agent_id);
-          const telemetry = telemetryBadge(capacity, t);
+          const telemetryClass = telemetryTone(capacity);
           const AgentIcon =
             agent.agent_id === "chatgpt"
               ? Brain
@@ -288,10 +263,14 @@ export const ProjectRoomHeader: React.FC<Props> = ({
                     {capacityLabel(capacity, t)}
                   </div>
                   <div
-                    className={`mt-0.5 text-[9px] font-semibold tracking-[0.12em] ${telemetry.className}`}
-                    title={capacity?.source}
+                    className={`mt-0.5 text-[9px] font-medium tabular-nums ${telemetryClass}`}
+                    title={`${capacity?.source || "no telemetry"} / ${capacity?.confidence || "unknown"}`}
                   >
-                    {telemetry.label}
+                    {capacity?.updated_at
+                      ? `${t("project_rooms.telemetry_updated")} ${formatTime(
+                          capacity.updated_at
+                        )}`
+                      : t("project_rooms.quota_no_data")}
                   </div>
                 </div>
               </div>
@@ -328,15 +307,7 @@ export const ProjectRoomHeader: React.FC<Props> = ({
                     {formatTime(capacity.reset_at)}
                   </span>
                 )}
-                {capacity?.updated_at && (
-                  <span
-                    className="inline-flex items-center gap-1"
-                    title={capacity.updated_at}
-                  >
-                    <Gauge className="h-3 w-3" />
-                    {formatTime(capacity.updated_at)}
-                  </span>
-                )}
+
               </div>
 
               <div className="mt-2.5 line-clamp-2 text-[10px] leading-relaxed text-zinc-500">
