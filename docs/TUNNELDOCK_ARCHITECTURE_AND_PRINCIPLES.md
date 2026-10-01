@@ -59,7 +59,7 @@ flowchart TD
 
         subgraph Daemons["底层运行时与进程池"]
             Otunnel["otunnel 守护进程 (主动长连接出站)"]
-            ChappieBroker["pi --chappie (MCP Broker / stdio)"]
+            ChappieBroker["chappie (独立 MCP Server + Session Broker)"]
             
             subgraph Sessions["工作区 Session 进程池"]
                 SessionA["Pi Session A (项目 A)"]
@@ -106,21 +106,21 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
 
 | 探测目标 | 探测方式 | 语义判定逻辑 | 源码对应 |
 | :--- | :--- | :--- | :--- |
-| **Node.js** | 检索 PATH 中 `node`，执行 `node -v` | 解析主版本号，强制校验 `major >= 26` | [`commands/env.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/env.rs) |
-| **npm** | 检索 `npm` 并执行 `npm -v` | 验证可用性与版本 | [`commands/env.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/env.rs) |
-| **Git** | 检索 `git` 并执行 `git --version` | 检查版本控制工具就绪状态 | [`commands/env.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/env.rs) |
-| **Rust** | 检索 `rustc` 并执行 `rustc --version` | 校验本地编译与工具链支持 | [`commands/env.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/env.rs) |
-| **cargo-binstall** | 检索 `cargo-binstall` | 用于预编译二进制极速安装 | [`commands/env.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/env.rs) |
-| **otunnel** | 检索 `otunnel` 并执行 `otunnel --version` | 核心隧道二进制可用性 | [`commands/env.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/env.rs) |
-| **Pi** | 检索全局或 npm 路径下的 `pi` | 本地执行客户端状态 | [`commands/env.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/env.rs) |
-| **Chappie** | 检索 `~/.chappie/` 或全局 `chappie` | 检验代理配置文件与依赖 | [`commands/env.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/env.rs) |
+| **Node.js** | 检索 PATH 中 `node`，执行 `node -v` | 解析主版本号，强制校验 `major >= 26` | [`commands/env.rs`](../src-tauri/src/commands/env.rs) |
+| **npm** | 检索 `npm` 并执行 `npm -v` | 验证可用性与版本 | [`commands/env.rs`](../src-tauri/src/commands/env.rs) |
+| **Git** | 检索 `git` 并执行 `git --version` | 检查版本控制工具就绪状态 | [`commands/env.rs`](../src-tauri/src/commands/env.rs) |
+| **Rust** | 检索 `rustc` 并执行 `rustc --version` | 校验本地编译与工具链支持 | [`commands/env.rs`](../src-tauri/src/commands/env.rs) |
+| **cargo-binstall** | 检索 `cargo-binstall` | 用于预编译二进制极速安装 | [`commands/env.rs`](../src-tauri/src/commands/env.rs) |
+| **otunnel** | 检索 `otunnel` 并执行 `otunnel --version` | 核心隧道二进制可用性 | [`commands/env.rs`](../src-tauri/src/commands/env.rs) |
+| **Pi** | 检索全局或 npm 路径下的 `pi` | 本地执行客户端状态 | [`commands/env.rs`](../src-tauri/src/commands/env.rs) |
+| **Chappie** | 检索 `~/.chappie/` 或全局 `chappie` | 检验代理配置文件与依赖 | [`commands/env.rs`](../src-tauri/src/commands/env.rs) |
 
 #### 流式事件驱动自动安装
-在 [`commands/install.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/install.rs) 中，安装过程不是简单的阻塞调用，而是基于 **Tauri Emitter 事件机制** 的流式推送：
+在 [`commands/install.rs`](../src-tauri/src/commands/install.rs) 中，安装过程不是简单的阻塞调用，而是基于 **Tauri Emitter 事件机制** 的流式推送：
 1. 根据 OS 平台适配包管理器：
    - **Windows**：优先选用系统自带的 `winget install`，或调用 PowerShell 脚本下载官方 MSI；
    - **macOS**：优先使用 `brew install`；
-   - **Node 生态**：对于 Pi / Chappie，调用 `npm install -g @zetaloop/chappie`。
+   - **Node 生态**：Pi 通过 npm 全局安装；Chappie 同时安装独立 `chappie` CLI，并通过 `pi install npm:@zetaloop/chappie` 注册 Pi 扩展。
 2. 通过管道异步读取被执行命令的标准输出（`stdout`）和标准错误（`stderr`），每读取一行即发射 `install-progress` 事件至前端：
    ```rust
    // install-progress 事件载荷
@@ -138,15 +138,18 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
 ### 3.2 隧道守护进程（otunnel）生命周期与动态端口机制
 
 #### 端口分配与 `.url` 临时文件回传机制
-在旧版本中，健康检查端口往往被硬编码为 `8080`，极易因端口被占用导致启动崩溃。TunnelDock 设计了更加健壮的**动态端口与文件回传协议**（参见 [`commands/otunnel.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/otunnel.rs)）：
+在旧版本中，健康检查端口往往被硬编码为 `8080`，极易因端口被占用导致启动崩溃。TunnelDock 设计了更加健壮的**动态端口与文件回传协议**（参见 [`commands/otunnel.rs`](../src-tauri/src/commands/otunnel.rs)）：
 1. 默认将端口设为 `0`（由操作系统内核自由分配闲置端口），避免任何冲突；
-2. 启动 `otunnel` 时通过参数 `--health-url-file <TEMP_URL_PATH>` 指定一个专属临时文件路径：
+2. 启动 `otunnel` 时通过 `--health.listen-addr 127.0.0.1:0` 请求自动端口，并通过 `--health.url-file <TEMP_URL_PATH>` 指定专属回传文件：
    ```rust
    let health_url_file = create_health_url_file_path(&state)?;
-   cmd.arg("--health-url-file").arg(&health_url_file);
+   cmd.arg("--health.listen-addr")
+       .arg("127.0.0.1:0")
+       .arg("--health.url-file")
+       .arg(&health_url_file);
    ```
 3. `otunnel` 启动并成功监听回环地址后，会将绑定的实际基础 URL（如 `http://127.0.0.1:54321`）回写入该文件；
-4. TunnelDock 在 10 秒超时窗口内以 100ms 为步长轮询读取该文件，校验必须为合法 `127.0.0.1` / `localhost` 格式，解析出真实端口并挂载到系统状态中。
+4. TunnelDock 在 10 秒超时窗口内以 100ms 为步长轮询读取该文件，校验必须为合法回环地址并解析真实端口；若 GUI 重启而既有 otunnel 仍存活，则会扫描运行目录中的历史 `otunnel-health-*.url` 并以真实 `/healthz` 响应恢复健康地址。
 
 ---
 
@@ -165,7 +168,7 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
 3. **API 凭据存在性**：检查 `~/.chappie/tunnelkey.txt` 是否存在且非空；
 4. **API Key 权限特征检查**：校验是否具备 `Tunnels: Read/Use` 权限约束；
 5. **otunnel 二进制可达性**：验证系统 PATH 是否可以调用 otunnel；
-6. **MCP 代理命令探测**：检查 `pi --chappie` 是否能正常调起并响应；
+6. **MCP Broker 探测**：检查独立 `chappie` CLI 与 Chappie MCP 通道是否能正常启动和响应；
 7. **控制面网络连通性**：发起对 OpenAI 隧道服务端点的 TLS 握手检测；
 8. **健康探针端口状态**：检测本地健康端口是否冲突。
 
@@ -176,7 +179,7 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
 ### 3.4 多工作区与 Pi Session 进程池管理
 
 #### 工作区元数据与 Git 嗅探
-在 [`commands/workspace.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/workspace.rs) 中，用户可以添加多个本地目录：
+在 [`commands/workspace.rs`](../src-tauri/src/commands/workspace.rs) 中，用户可以添加多个本地目录：
 - 路径防重与合法性验证；
 - 每次检索列表时，无阻塞执行：
   - `git branch --show-current`：获取当前分支；
@@ -210,7 +213,7 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
 
 ### 3.5 MCP 工具调用审计与数据分析
 
-ChatGPT 对本地发起的操作均属于高敏感操作。TunnelDock 内置了全量审计引擎（[`commands/history.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/commands/history.rs) 与前端 `HistoryView.tsx`）：
+ChatGPT 对本地发起的操作均属于高敏感操作。TunnelDock 内置了全量审计引擎（[`commands/history.rs`](../src-tauri/src/commands/history.rs) 与前端 `HistoryView.tsx`）：
 - **全要素记录**：记录每一次调用的时间戳、所属 Session、工具名称（`read`、`write`、`edit`、`bash`、`git` 等）、入参 JSON、执行耗时（毫秒）、执行状态（`success` / `executing` / `error`）以及执行结果摘要。
 - **本地统计与聚合**：
   - 自动汇总总调用量、成功率百分比、平均响应时间；
@@ -224,17 +227,19 @@ ChatGPT 对本地发起的操作均属于高敏感操作。TunnelDock 内置了�
 
 TunnelDock 采用最小权限与配置分层存储原则：
 - **凭据最小化暴露**：用户的 OpenAI Restricted API Key 存储在操作系统用户目录下的 `~/.chappie/tunnelkey.txt`，设置仅当前用户可读写，不与其他应用混合存储；
-- **动态配置同步引擎**：在 [`utils/paths.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/utils/paths.rs) 中，任何设置变更（修改健康检查端口、切换 profile、更新 tunnel ID）都会触发自动渲染并同步更新 `~/.chappie/chappie.yaml`：
+- **动态配置同步引擎**：在 [`utils/paths.rs`](../src-tauri/src/utils/paths.rs) 中，任何设置变更（修改健康检查端口、切换 profile、更新 tunnel ID）都会触发自动渲染并同步更新 `~/.chappie/chappie.yaml`：
   ```yaml
-  version: 1
-  tunnel:
-    id: <TUNNEL_ID>
-    credentials_file: ~/.chappie/tunnelkey.txt
+  config_version: 1
+  control_plane:
+    api_key: file:~/.chappie/tunnelkey.txt
+    base_url: https://api.openai.com
+    tunnel_id: <TUNNEL_ID>
   health:
-    listen: 127.0.0.1:<PORT>
+    listen_addr: 127.0.0.1:<PORT>
   mcp:
-    command: pi
-    args: ["--chappie"]
+    commands:
+      - channel: main
+        command: chappie
   ```
 
 ---
@@ -243,7 +248,7 @@ TunnelDock 采用最小权限与配置分层存储原则：
 
 ### 4.1 进程树优雅销毁与防假死机制
 
-在桌面操作系统（尤其是 Windows）中，管理多个长生命周期子进程极易出现“主窗口关闭了，后台仍有僵尸 node/pi 进程占用 CPU”或“关闭应用时弹窗提示程序未响应”的现象。TunnelDock 对此进行了深度治理（参见 [`src-tauri/src/lib.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/lib.rs) 与 [`state.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/state.rs)）：
+在桌面操作系统（尤其是 Windows）中，管理多个长生命周期子进程极易出现“主窗口关闭了，后台仍有僵尸 node/pi 进程占用 CPU”或“关闭应用时弹窗提示程序未响应”的现象。TunnelDock 对此进行了深度治理（参见 [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs) 与 [`state.rs`](../src-tauri/src/state.rs)）：
 
 ```mermaid
 sequenceDiagram
@@ -259,14 +264,15 @@ sequenceDiagram
     Tauri->>Worker: 启动后台清理线程
     Worker->>State: cleanup_all_processes()
     Note over State,OS: 1. 关闭所有 Session 的 ChildStdin 管道 (通知 EOF)
-    Note over State,OS: 2. 通过 sysinfo 递归查找 otunnel 及 Pi 进程树全部子进程
-    Note over State,OS: 3. 发送优雅终止并强行回收 PID
+    Note over State,OS: 2. 回收 TunnelDock 自己启动的 otunnel 与 Pi 进程树
+    Note over State,OS: 3. 外部发现但非 TunnelDock 创建的 otunnel 保持运行
     Worker->>State: 标记持久化数据为 stopped 状态
     Worker->>Tauri: 调用 app_handle.exit(0) 安全退出
 ```
 
 - **事件防阻塞**：在 `ExitRequested` 事件中绝对不在 UI 线程做阻塞等待，而是通过 `api.prevent_exit()` 接管，在后台独立线程中完成终止操作后调用 `exit(0)`，从根源杜绝 Windows “应用程序无响应” 假死警告。
 - **原子性保证**：通过 `AtomicBool` 状态标志保证销毁过程幂等，即使 `ExitRequested`、`Exit` 和 `Drop` 重复触发，销毁逻辑也仅执行一次。
+- **进程所有权隔离**：`otunnel_pid` 记录当前可见守护进程，而 `otunnel_owned_pid` 只记录由 TunnelDock 本次进程实际创建的守护进程；应用退出时只终止后者，因此可以保留独立开发控制 Tunnel。
 
 ### 4.2 Windows 隐匿后台运行（CREATE_NO_WINDOW）
 
@@ -284,7 +290,7 @@ cmd.creation_flags(CREATE_NO_WINDOW);
 
 ### 4.3 版本平滑升级与历史数据无损迁移
 
-TunnelDock 经历了从 `local-mcp-console`、`chappie-desktop` 到 `TunnelDock` 的架构演进。为了保护用户的历史配置与工作区不丢失，在 [`state.rs`](file:///c:/Users/Administrator/Documents/temp/code/aizeek/tunneldock/src-tauri/src/state.rs) 初始化时内置了**平滑迁移引擎**：
+TunnelDock 经历了从 `local-mcp-console`、`chappie-desktop` 到 `TunnelDock` 的架构演进。为了保护用户的历史配置与工作区不丢失，在 [`state.rs`](../src-tauri/src/state.rs) 初始化时内置了**平滑迁移引擎**：
 1. 检查当前标准数据目录 `TunnelDock/` 是否存在；
 2. 若不存在，按优先级探测历史遗留目录 `local-mcp-console/` 与 `chappie-desktop/`；
 3. 检测到旧目录后优先尝试原子重命名（`fs::rename`）；若跨分区失败则触发逐文件安全复制，确保升级无感过渡。

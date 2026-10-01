@@ -32,7 +32,7 @@ OpenAI Secure MCP Tunnel
       │
       │ stdio
       ▼
- pi --chappie
+ chappie
       │
       │ session broker
       ▼
@@ -186,60 +186,37 @@ Windows 防火墙开放入站端口
 
 # 三、Chappie 和 Pi 分别负责什么
 
-这里有两个不同角色的 Pi。
+当前版本里，Chappie Broker 和项目 Pi Session 是两个独立角色。
 
 很多第一次配置的人最容易在这里混淆。
 
-## 第一个 Pi：MCP Broker
+## Chappie：独立 MCP Server + Session Broker
 
 Tunnel 配置里启动的是：
 
 ```bash
-pi --chappie
+chappie
 ```
 
-它的作用不是打开项目开发界面。
+它不是项目开发进程，而是独立的 stdio MCP Server，同时在本机 `~/.chappie` 对应的 IPC 端点上维护 Session Broker。
 
-它是一个 stdio MCP Server。
-
-Chappie 注册了：
+链路类似：
 
 ```text
---chappie
-Serve Chappie over MCP
+otunnel stdin/stdout
+  ↓
+chappie MCP Server
+  ↓
+本地 Chappie Broker
+  ↓
+已注册的 Pi Session
 ```
 
-当 Pi 使用：
-
-```bash
-pi --chappie
-```
-
-启动后，会进入类似这样的链路：
-
-```text
-stdin
-  ↓
-MCP request
-  ↓
-Chappie
-  ↓
-Broker
-  ↓
-MCP response
-  ↓
-stdout
-```
-
-它不会负责某一个具体项目。
-
-它更像一个本地总入口。
-
-Chappie 当前实现中，`--chappie` 会进入 `serveChappie()`，并使用 stdin/stdout 建立 MCP transport。 
+它本身不代表某一个具体项目，而是所有本地 Pi Session 的统一入口与路由层。
 
 ---
 
-## 第二个 Pi：真正的项目 Session
+## Pi：真正的项目 Session
 
 真正操作项目时，需要进入项目目录：
 
@@ -283,7 +260,7 @@ OpenAI Tunnel
 otunnel
    │
    ▼
-pi --chappie
+chappie
    │
    ├─────────────┬─────────────┐
    ▼             ▼             ▼
@@ -551,29 +528,33 @@ pi list
 @zetaloop/chappie
 ```
 
-Chappie 的标准安装方式就是通过 Pi Package 机制安装。
+当前版本需要同时具备独立 Chappie CLI 和 Pi Extension。
 
-检查 Chappie 是否真正被 Pi 加载：
+安装独立 Broker CLI：
 
 ```powershell
-pi --help | Select-String -Pattern "chappie"
+npm install -g @zetaloop/chappie@1
 ```
 
-正常应该能看到类似：
+检查 Broker CLI：
 
-```text
---chappie
-Serve Chappie over MCP
+```powershell
+chappie --version
 ```
 
-如果完全没有输出：
+同时确认 Pi Extension：
 
-```text
-Pi 已安装
-但 Chappie Extension 没有正常加载
+```powershell
+pi list
 ```
 
-这时应该先处理 Chappie，而不是继续检查 Tunnel。
+应能看到 `npm:@zetaloop/chappie`。如果独立 CLI 与 Pi Extension 版本长期错位，可能出现 Pi 已选择 `chappie/chatgpt`，但 Session 始终无法注册到 Broker 的情况；此时先执行：
+
+```powershell
+pi update --extensions
+```
+
+再重新启动 Pi Session。
 
 ---
 
@@ -649,7 +630,7 @@ otunnel init `
   --profile chappie `
   --tunnel-id $TunnelId `
   --control-plane-api-key-ref "file:$KeyFile" `
-  --mcp-command "pi --chappie"
+  --mcp-command "chappie"
 ```
 
 这里：
@@ -673,13 +654,13 @@ otunnel init `
 表示从本地文件读取 API Key。
 
 ```text
---mcp-command "pi --chappie"
+--mcp-command "chappie"
 ```
 
 表示收到 MCP 请求之后，由：
 
 ```text
-pi --chappie
+chappie
 ```
 
 提供本地 MCP Server。
@@ -721,7 +702,7 @@ CHECK config_source            PASS
 CHECK profile_load             PASS
 CHECK tunnel_id                PASS
 CHECK control_plane_api_key    PASS
-CHECK mcp_target               PASS pi --chappie
+CHECK mcp_target               PASS chappie
 CHECK mcp_server_reachable     FAIL
 CHECK control_plane_connection PASS
 ```
@@ -757,13 +738,14 @@ pi list
 ```
 
 ```powershell
-pi --help | Select-String chappie
+chappie --version
+(Get-Content "$HOME\.pi\agent\npm\node_modules\@zetaloop\chappie\package.json" -Raw | ConvertFrom-Json).version
 ```
 
 最后直接运行：
 
 ```powershell
-pi --chappie
+chappie
 ```
 
 正常情况下：
@@ -811,7 +793,7 @@ OpenAI
    ↕
 otunnel
    ↕
-pi --chappie
+chappie
 ```
 
 通常一台电脑只需要启动一个。
@@ -1801,8 +1783,9 @@ node -v
 npm view @zetaloop/chappie engines
 pi --version
 pi list
-pi --help | Select-String chappie
-pi --chappie
+chappie --version
+(Get-Content "$HOME\.pi\agent\npm\node_modules\@zetaloop\chappie\package.json" -Raw | ConvertFrom-Json).version
+chappie
 ```
 
 ---
@@ -2015,7 +1998,7 @@ ChatGPT 工具确认
                       │
                       │ stdio
                       ▼
-                pi --chappie
+                chappie
                  MCP Broker
                       │
           ┌───────────┼───────────┐
@@ -2046,7 +2029,7 @@ otunnel
 负责：
 本地 Tunnel Client
 
-pi --chappie
+chappie
 负责：
 MCP Broker
 

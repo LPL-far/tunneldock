@@ -62,7 +62,7 @@ OpenAI Secure MCP Tunnel
       │
       │ stdio
       ▼
- pi --chappie            ← stdio MCP Server（Chappie broker）
+    chappie              ← 独立 MCP Server + 本地 Session Broker
       │
       ▼
 项目中的 Pi Session
@@ -72,7 +72,7 @@ OpenAI Secure MCP Tunnel
       └── build / test
 ```
 
-关键在于：本地 `otunnel` **主动**通过 HTTPS 出站连接 OpenAI 拉取 MCP 请求，再转发给本地 `pi --chappie`。网络方向始终是出站 443，一般不受防火墙、NAT 与路由器设置影响。
+关键在于：本地 `otunnel` **主动**通过 HTTPS 出站连接 OpenAI 拉取 MCP 请求，再转发给独立的 `chappie` MCP Server；各项目中的 Pi Session 通过本地 Chappie Broker 注册和接受调用。网络方向始终是出站 443，一般不受防火墙、NAT 与路由器设置影响。
 
 ## 安装
 
@@ -96,7 +96,7 @@ OpenAI Secure MCP Tunnel
 
 ```bash
 git clone https://github.com/t59688/tunneldock.git
-cd hola
+cd tunneldock
 npm ci
 npm run tauri build
 ```
@@ -119,7 +119,7 @@ npm run tauri build
 | 路径 | 用途 |
 | --- | --- |
 | `~/.chappie/tunnelkey.txt` | OpenAI Restricted API Key（控制面凭据） |
-| `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认由系统自动分配空闲端口）、MCP 目标（`pi --chappie`） |
+| `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认由系统自动分配空闲端口）、MCP 目标（独立 `chappie` CLI） |
 | 系统数据目录下的 `TunnelDock/` | 工作区列表、应用设置、MCP 调用历史（Rust 端持久化，重启后保留） |
 
 从旧版 `local-mcp-console/` 或更早的 `chappie-desktop/` 升级时，TunnelDock 会在首次启动时自动迁移上述应用数据；`~/.chappie/` 属于 Chappie/otunnel 兼容配置，不会随产品品牌改名。
@@ -131,7 +131,7 @@ npm run tauri build
 | 命令 | 说明 |
 | --- | --- |
 | `npm run dev` | 仅前端 Vite 开发服务器（`http://localhost:11420`） |
-| `npm run tauri dev` | 桌面应用开发模式运行（热更新） |
+| `npm run tauri dev` | 桌面应用开发模式运行（热更新）；开发 TunnelDock 自身时可用外部启动的 Tunnel/Pi 作为独立控制通道 |
 | `npm run build` | 前端类型检查（`tsc`）+ 构建 |
 | `npm run tauri build` | 完整桌面构建（前端 + Rust） |
 | `npm run tauri <cmd>` | 透传 Tauri CLI 的其他命令 |
