@@ -32,6 +32,7 @@ const DISCUSSION_FILE: &str = "discussion.json";
 const RUNS_FILE: &str = "runs.json";
 const BRIDGE_DIR: &str = ".tunneldock";
 const BRIDGE_FILE: &str = "project_room.json";
+const WEB_CONTEXT_FILE: &str = "web_context.json";
 const CONSTITUTION_FILE: &str = "CONSTITUTION.md";
 const INBOX_DIR: &str = "inbox";
 const INBOX_PROTOCOL_FILE: &str = "INBOX_PROTOCOL.md";
@@ -45,6 +46,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 use std::os::windows::process::CommandExt;
 
 mod agent_worker;
+mod antigravity;
 mod coordination;
 mod memory;
 mod telemetry;
@@ -214,6 +216,7 @@ fn seed_configs(state: &AppState) -> Vec<ProjectRoomConfig> {
                 local_root: local_root.to_string(),
                 repo_root: local_root.to_string(),
                 workspace_id,
+                antigravity_cascade_id: None,
                 remote: default_remote(id),
                 enabled: true,
                 keep_session_alive: true,
@@ -487,18 +490,15 @@ pub fn refresh_agent_capacities(
     Ok(capacities)
 }
 
-#[tauri::command]
-pub fn dispatch_project_task(
-    state: State<'_, Arc<AppState>>,
-    project_id: String,
-    task_id: String,
-    agent_id: String,
+pub(super) fn dispatch_project_task_unlocked(
+    state: &AppState,
+    project_id: &str,
+    task_id: &str,
+    agent_id: &str,
 ) -> Result<AgentRun, String> {
-    let _guard = state.project_store_lock.lock();
-    ensure_store(&state)?;
-    refresh_run_states_unlocked(&state, &project_id)?;
+    refresh_run_states_unlocked(state, project_id)?;
 
-    let snapshot = load_snapshot_unlocked(&state, &project_id)?;
+    let mut snapshot = load_snapshot_unlocked(state, project_id)?;
     let task = snapshot
         .tasks
         .iter()
@@ -506,7 +506,7 @@ pub fn dispatch_project_task(
         .cloned()
         .ok_or_else(|| format!("找不到 Task: {}", task_id))?;
 
-    if !matches!(agent_id.as_str(), "codex" | "gemini") {
+    if !matches!(agent_id, "codex" | "gemini") {
         return Err("当前只能直接 dispatch 给 Codex 或 Antigravity/Gemini；ChatGPT 由网页 Project Room 协调。".to_string());
     }
 
@@ -521,39 +521,36 @@ pub fn dispatch_project_task(
     let output_path = run_root.join("HANDOFF.md");
     let log_path = run_root.join("stdout.log");
     let error_path = run_root.join("stderr.log");
-    let prompt = task_prompt(&snapshot, &task, &agent_id, &output_path);
+    let prompt = task_prompt(&snapshot, &task, agent_id, &output_path);
     fs::write(&prompt_path, &prompt)
         .map_err(|error| format!("写入 {} 失败: {}", prompt_path.display(), error))?;
-
-    let executable = match agent_id.as_str() {
-        "codex" => find_codex_executable().ok_or_else(|| "未找到 Codex CLI".to_string())?,
-        "gemini" => {
-            return Err(
-                "Antigravity Agent 已切换为 existing Cascade RPC 模式；请先完成 Project Room 的长期对话绑定，TunnelDock 不再启动便携 IDE/CLI。"
-                    .to_string(),
-            );
-        }
-        _ => unreachable!(),
-    };
-
-    let stdout = File::create(&log_path)
+    File::create(&log_path)
         .map_err(|error| format!("创建 {} 失败: {}", log_path.display(), error))?;
-    let stderr = File::create(&error_path)
+    File::create(&error_path)
         .map_err(|error| format!("创建 {} 失败: {}", error_path.display(), error))?;
 
-    let args = if agent_id == "codex" {
+    let (pid, external_session_id, start_step) = if agent_id == "codex" {
+        let executable = find_codex_executable().ok_or_else(|| "未找到 Codex CLI".to_string())?;
+        let stdout = File::create(&log_path)
+            .map_err(|error| format!("创建 {} 失败: {}", log_path.display(), error))?;
+        let stderr = File::create(&error_path)
+            .map_err(|error| format!("创建 {} 失败: {}", error_path.display(), error))?;
+        let sandbox = if task.kind == "consultation" {
+            "read-only"
+        } else {
+            "workspace-write"
+        };
         let mut args = vec![
             "exec".to_string(),
             "-C".to_string(),
             snapshot.config.local_root.clone(),
             "--sandbox".to_string(),
-            "workspace-write".to_string(),
+            sandbox.to_string(),
             "--skip-git-repo-check".to_string(),
             "--json".to_string(),
             "-o".to_string(),
             output_path.to_string_lossy().to_string(),
         ];
-
         if let Some(model) = snapshot
             .capacities
             .iter()
@@ -564,47 +561,39 @@ pub fn dispatch_project_task(
             args.push("--model".to_string());
             args.push(model.clone());
         }
-
         args.push(prompt.clone());
-        args
+
+        let cwd = PathBuf::from(&snapshot.config.local_root);
+        let mut command = build_worker_command(&executable, &args, &cwd, stdout, stderr);
+        let child = command
+            .spawn()
+            .map_err(|error| format!("启动 Codex worker 失败: {}", error))?;
+        let pid = child.id();
+        state.running_agent_pids.lock().insert(run_id.clone(), pid);
+        (Some(pid), None, None)
     } else {
-        vec![
-            "chat".to_string(),
-            "--mode".to_string(),
-            "agent".to_string(),
-            "--new-window".to_string(),
-            "--add-file".to_string(),
-            PathBuf::from(&snapshot.config.local_root)
-                .join(BRIDGE_DIR)
-                .join(BRIDGE_FILE)
-                .to_string_lossy()
-                .to_string(),
-            "--add-file".to_string(),
-            project_memory_dir(&snapshot.config)
-                .join(PROJECT_STATE_FILE)
-                .to_string_lossy()
-                .to_string(),
-            prompt.clone(),
-        ]
+        let binding = antigravity::resolve_cascade(
+            &snapshot.config.local_root,
+            snapshot.config.antigravity_cascade_id.as_deref(),
+        )?;
+        if snapshot.config.antigravity_cascade_id.as_deref() != Some(&binding.cascade_id) {
+            snapshot.config.antigravity_cascade_id = Some(binding.cascade_id.clone());
+            snapshot.config.updated_at = local_now_rfc3339();
+            let dir = project_dir(state, project_id)?;
+            write_json(&dir.join(CONFIG_FILE), &snapshot.config)?;
+        }
+        antigravity::send_task(&binding, &prompt)?;
+        (None, Some(binding.cascade_id), Some(binding.step_count))
     };
 
-    let cwd = PathBuf::from(&snapshot.config.local_root);
-    let mut command = build_worker_command(&executable, &args, &cwd, stdout, stderr);
-    let child = command
-        .spawn()
-        .map_err(|error| format!("启动 {} worker 失败: {}", agent_id, error))?;
-    let pid = child.id();
-
-    let mut run = AgentRun {
+    let run = AgentRun {
         id: run_id.clone(),
         task_id: task.id.clone(),
-        agent_id: agent_id.clone(),
-        status: if agent_id == "gemini" {
-            "interactive".to_string()
-        } else {
-            "running".to_string()
-        },
-        pid: Some(pid),
+        agent_id: agent_id.to_string(),
+        status: "running".to_string(),
+        pid,
+        external_session_id,
+        start_step,
         started_at: local_now_rfc3339(),
         finished_at: None,
         prompt_path: prompt_path.to_string_lossy().to_string(),
@@ -614,9 +603,7 @@ pub fn dispatch_project_task(
         error_message: None,
     };
 
-    state.running_agent_pids.lock().insert(run_id.clone(), pid);
-
-    let dir = project_dir(&state, &project_id)?;
+    let dir = project_dir(state, project_id)?;
     let runs_path = dir.join(RUNS_FILE);
     let mut runs = read_json::<Vec<AgentRun>>(&runs_path)?;
     runs.insert(0, run.clone());
@@ -625,7 +612,7 @@ pub fn dispatch_project_task(
     let tasks_path = dir.join(TASKS_FILE);
     let mut tasks = read_json::<Vec<ProjectTask>>(&tasks_path)?;
     if let Some(current) = tasks.iter_mut().find(|item| item.id == task.id) {
-        current.owner = agent_id.clone();
+        current.owner = agent_id.to_string();
         current.status = "active".to_string();
         current.updated_at = local_now_rfc3339();
     }
@@ -634,27 +621,24 @@ pub fn dispatch_project_task(
     let _ = append_system_message(
         &dir,
         "system",
-        format!(
-            "Dispatched {} to {} as {}. Handoff: {}",
-            task.id, agent_id, run.id, run.output_path
-        ),
+        format!("Dispatched {} to {} as {}.", task.id, agent_id, run.id),
     );
 
-    let snapshot = load_snapshot_unlocked(&state, &project_id)?;
+    let snapshot = load_snapshot_unlocked(state, project_id)?;
     sync_project_bridge(&snapshot)?;
-
-    // Antigravity's launcher may exit after handing the chat to the GUI. Keep the
-    // run interactive until the instructed HANDOFF.md appears.
-    if agent_id == "gemini" {
-        run.pid = None;
-        state.running_agent_pids.lock().remove(&run_id);
-        if let Some(saved) = runs.iter_mut().find(|item| item.id == run_id) {
-            saved.pid = None;
-        }
-        write_json(&runs_path, &runs)?;
-    }
-
     Ok(run)
+}
+
+#[tauri::command]
+pub fn dispatch_project_task(
+    state: State<'_, Arc<AppState>>,
+    project_id: String,
+    task_id: String,
+    agent_id: String,
+) -> Result<AgentRun, String> {
+    let _guard = state.project_store_lock.lock();
+    ensure_store(&state)?;
+    dispatch_project_task_unlocked(&state, &project_id, &task_id, &agent_id)
 }
 
 #[tauri::command]
@@ -1101,15 +1085,21 @@ Hard isolation rule:
 At the beginning of this web conversation:
 1. Bind to the local Pi/Chappie session whose cwd is exactly '{local}'. Use sessions -> cwd -> sessionId -> init; never choose by an old remembered session ID.
 2. Read '{local}\.tunneldock\CONSTITUTION.md'.
-3. Read '{local}\.tunneldock\project_room.json' and '{local}\.tunneldock\INBOX_PROTOCOL.md'.
-4. Read the canonical durable project memory:
+3. Read '{local}\.tunneldock\web_context.json' and '{local}\.tunneldock\INBOX_PROTOCOL.md'. Read full `project_room.json` only when the current question needs details omitted from the compact web context.
+4. Read the default durable memory set:
    - '{local}\.project_memory\PROJECT_STATE.md'
    - '{local}\.project_memory\SESSION_HANDOFF.md'
-   - '{local}\.project_memory\DECISIONS.md'
-   - '{local}\.project_memory\EXPERIMENTS.md'
    - '{local}\.project_memory\MEMORY_PROTOCOL.md'
-5. Treat chat history as working memory only. The files above are the durable source of truth.
+   Read DECISIONS.md or EXPERIMENTS.md only when the current question actually needs historical decisions or experiment detail.
+5. Treat chat history as working memory only. Durable project files are the source of truth.
 6. When Codex/Gemini/ChatGPT need to exchange a durable question, disagreement, task, handoff, or experiment result, write one JSON event to '{local}\.tunneldock\inbox\' using INBOX_PROTOCOL.md. Never edit project_room.json directly.
+7. When you need independent opinions from Codex and Gemini, write one `consult.request` event. TunnelDock will auto-dispatch both read-only consultations and collect their short handoffs into one discussion thread. If there is a material disagreement, you may send one focused follow-up using the same `thread_id`; avoid open-ended agent ping-pong.
+
+Web response budget:
+- Keep normal web replies compact: at most 6 short bullets or roughly 350 English words unless I explicitly ask for detail.
+- Do not paste raw tool output, full worker handoffs, long logs, or large code excerpts. Put details in project files/artifacts and cite paths.
+- After a multi-agent consultation, report only consensus, disagreement, decisive evidence, and the next action. Do not quote both agents verbatim.
+- `web_context.json` is the default lightweight web snapshot. Read `project_room.json`, full memory, or run artifacts only when the current question actually needs them.
 
 Research operating rules:
 - The goal is top-conference research. Keep code and algorithms simple, explicit, and correct.
@@ -1123,7 +1113,7 @@ Research operating rules:
 - Important Codex algorithm changes require ChatGPT methodological review.
 - You and the other agents may discuss and challenge each other; I remain the final decision maker.
 
-When allocating work, first inspect current tasks, agent capacity telemetry, experiments, and discussion in project_room.json, then explain the allocation before asking workers to execute."#,
+When allocating work, first inspect current tasks, agent capacity telemetry, experiments, and discussion in web_context.json, then explain the allocation briefly before asking workers to execute."#,
             name = snapshot.config.name,
             id = snapshot.config.id,
             local = snapshot.config.local_root,
@@ -1147,15 +1137,21 @@ TunnelDock workspace ID：{workspace}
 这个网页对话开始时必须：
 1. 通过 Pi/Chappie 的 sessions -> cwd -> sessionId -> init，绑定 cwd 严格等于 '{local}' 的本地 Session；不要使用记忆中的旧 sessionId 猜测绑定。
 2. 阅读 '{local}\.tunneldock\CONSTITUTION.md'。
-3. 阅读 '{local}\.tunneldock\project_room.json' 和 '{local}\.tunneldock\INBOX_PROTOCOL.md'。
-4. 阅读项目唯一持久化科研记忆：
+3. 阅读 '{local}\.tunneldock\web_context.json' 和 '{local}\.tunneldock\INBOX_PROTOCOL.md'。只有当前问题确实需要轻量上下文中省略的细节时，才读取完整 `project_room.json`。
+4. 默认只读取持久化记忆中的：
    - '{local}\.project_memory\PROJECT_STATE.md'
    - '{local}\.project_memory\SESSION_HANDOFF.md'
-   - '{local}\.project_memory\DECISIONS.md'
-   - '{local}\.project_memory\EXPERIMENTS.md'
    - '{local}\.project_memory\MEMORY_PROTOCOL.md'
-5. 对话历史只作为工作记忆；上述文件才是持久化 source of truth。
+   只有涉及历史决策或实验细节时，再读取 DECISIONS.md / EXPERIMENTS.md。
+5. 对话历史只作为工作记忆；项目持久化文件才是 source of truth。
 6. ChatGPT / Codex / Gemini 需要跨 Agent 留下问题、分歧、任务、handoff 或实验结果时，按 INBOX_PROTOCOL.md 向 '{local}\.tunneldock\inbox\' 写入单个 JSON event；不得直接修改 project_room.json。
+7. 需要 Codex 与 Gemini 独立给意见时，只写一个 `consult.request`；TunnelDock 自动创建两个只读咨询任务、分别调度，并把短 handoff 收敛到同一个 discussion thread。若存在实质分歧，可复用同一 `thread_id` 再追问一次；默认不要无限来回辩论。
+
+网页回复上下文预算：
+- 默认每次网页回复最多 6 个短要点，或约 500 个中文字符；除非我明确要求展开。
+- 不在网页里粘贴原始工具输出、完整 worker handoff、长日志或大段代码；细节写入项目文件/产物，只返回路径和结论。
+- 多智能体咨询完成后，只汇总：共识、分歧、决定性证据、下一步。不要逐字复述两个 Agent 的回答。
+- `web_context.json` 是网页端默认轻量快照；只有当前问题确实需要时才读取 `project_room.json`、完整 memory 或 run artifact。
 
 科研工作硬规则：
 - 目标是顶会论文；代码和算法表达必须简洁、逻辑清晰、可验证、正确。
@@ -1169,7 +1165,7 @@ TunnelDock workspace ID：{workspace}
 - Codex 的重要算法改动需要 ChatGPT 做科研意图和方法一致性 review。
 - 三个 Agent 可以互相讨论、质疑和反驳；我始终是最终研究决策者。
 
-每次调度前，先从 project_room.json 查看当前 tasks、agent capacity、experiments 和 discussion，再说明为什么这样分配额度与任务，然后再让 worker 执行。"#,
+每次调度前，先从 web_context.json 查看当前 tasks、agent capacity、experiments 和 discussion，用一两句话说明分配原因，然后再让 worker 执行。"#,
             name = snapshot.config.name,
             id = snapshot.config.id,
             local = snapshot.config.local_root,
@@ -1333,6 +1329,7 @@ mod tests {
             local_root: root.to_string_lossy().to_string(),
             repo_root: root.to_string_lossy().to_string(),
             workspace_id: None,
+            antigravity_cascade_id: None,
             remote: ProjectRemote::default(),
             enabled: true,
             keep_session_alive: true,

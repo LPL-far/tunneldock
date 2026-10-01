@@ -62,7 +62,11 @@ pub(super) fn task_prompt(
     } else {
         task.reviewers.join(", ")
     };
-    let write_scope = if task.write_scope.is_empty() {
+    let is_consultation = task.kind == "consultation";
+    let write_scope = if is_consultation {
+        "This is a read-only consultation. Do not modify project files, run destructive commands, or create artifacts unless the question explicitly requires a tiny diagnostic output."
+            .to_string()
+    } else if task.write_scope.is_empty() {
         "No narrow write scope was declared. Minimize edits and do not touch unrelated files."
             .to_string()
     } else {
@@ -73,7 +77,7 @@ pub(super) fn task_prompt(
     };
     let handoff_delivery = if agent_id == "gemini" {
         format!(
-            "Before finishing, write the same handoff text to this exact file: {}",
+            "TunnelDock captures your final Cascade response and persists it to: {}",
             output_path.display()
         )
     } else {
@@ -81,6 +85,11 @@ pub(super) fn task_prompt(
             "TunnelDock will persist your final response to: {}",
             output_path.display()
         )
+    };
+    let response_rule = if is_consultation {
+        "This is a consultation round. Keep the final response under 1200 characters. Give only: Facts, Interpretation/Disagreement, Recommendation, and the single most important uncertainty. Do not repeat logs or long code excerpts."
+    } else {
+        "Keep the final handoff concise. Do not paste raw logs or large code excerpts; point to files/artifacts instead."
     };
 
     format!(
@@ -111,6 +120,7 @@ Research rules:
 Before editing, read the Project Room snapshot, Constitution, PROJECT_STATE.md, SESSION_HANDOFF.md, and relevant project instructions (AGENTS.md/README).
 If the task is underspecified or conflicts with current evidence, state the conflict instead of inventing a design.
 After implementation, run the smallest sufficient correctness checks.
+{response_rule}
 Your final response must be a concise handoff with:
 1. Summary
 2. Files changed
@@ -133,6 +143,7 @@ Your final response must be a concise handoff with:
         write_scope = write_scope,
         reviewers = reviewers,
         handoff_delivery = handoff_delivery,
+        response_rule = response_rule,
     )
 }
 
@@ -211,8 +222,10 @@ pub(super) fn refresh_run_states_unlocked(
     let dir = project_dir(state, project_id)?;
     let runs_path = dir.join(RUNS_FILE);
     let tasks_path = dir.join(TASKS_FILE);
+    let discussion_path = dir.join(DISCUSSION_FILE);
     let mut runs = read_json::<Vec<AgentRun>>(&runs_path)?;
     let mut tasks = read_json::<Vec<ProjectTask>>(&tasks_path)?;
+    let mut discussion = read_json::<Vec<ProjectDiscussionMessage>>(&discussion_path)?;
     let mut changed = false;
 
     for run in &mut runs {
@@ -221,11 +234,81 @@ pub(super) fn refresh_run_states_unlocked(
         }
 
         let output_path = PathBuf::from(&run.output_path);
+        if run.agent_id == "gemini" && !output_path.exists() {
+            let Some(cascade_id) = run.external_session_id.as_deref() else {
+                run.status = "failed".to_string();
+                run.finished_at = Some(local_now_rfc3339());
+                run.error_message = Some("Gemini run 缺少 external_session_id".to_string());
+                changed = true;
+                continue;
+            };
+            let start_step = run.start_step.unwrap_or_default();
+            match antigravity::poll_run(cascade_id, start_step) {
+                Ok(antigravity::CascadeRunUpdate::Running) => continue,
+                Ok(antigravity::CascadeRunUpdate::Completed(text)) => {
+                    run.error_message = None;
+                    fs::write(&output_path, text).map_err(|error| {
+                        format!("写入 {} 失败: {}", output_path.display(), error)
+                    })?;
+                }
+                Ok(antigravity::CascadeRunUpdate::Failed(error)) => {
+                    run.status = "failed".to_string();
+                    run.finished_at = Some(local_now_rfc3339());
+                    run.error_message = Some(error.clone());
+                    if let Some(task) = tasks.iter_mut().find(|task| task.id == run.task_id) {
+                        task.status = "blocked".to_string();
+                        task.summary = error.chars().take(2_000).collect();
+                        task.updated_at = local_now_rfc3339();
+                    }
+                    discussion.insert(
+                        0,
+                        ProjectDiscussionMessage {
+                            id: next_id("MSG"),
+                            thread_id: tasks
+                                .iter()
+                                .find(|task| task.id == run.task_id)
+                                .map(|task| {
+                                    if task.thread_id.is_empty() {
+                                        task.id.clone()
+                                    } else {
+                                        task.thread_id.clone()
+                                    }
+                                })
+                                .unwrap_or_else(|| "agent-runs".to_string()),
+                            author: "system".to_string(),
+                            recipients: vec!["chatgpt".to_string()],
+                            message: format!(
+                                "{} failed: {}",
+                                run.agent_id,
+                                error.chars().take(1_500).collect::<String>()
+                            ),
+                            created_at: local_now_rfc3339(),
+                        },
+                    );
+                    changed = true;
+                    continue;
+                }
+                Err(error) => {
+                    // The local Agent Manager may briefly restart or rotate RPC
+                    // ports. Keep the run alive and retry on the next supervisor
+                    // cycle instead of turning a transport hiccup into task failure.
+                    run.error_message = Some(format!(
+                        "Antigravity poll temporarily unavailable: {}",
+                        error.chars().take(1_000).collect::<String>()
+                    ));
+                    changed = true;
+                    continue;
+                }
+            }
+        }
+
         let output = fs::read_to_string(&output_path)
             .ok()
             .filter(|text| !text.trim().is_empty());
-
-        let process_alive = run.pid.map(is_process_running).unwrap_or(false);
+        let process_alive = run
+            .pid
+            .map(is_process_running)
+            .unwrap_or(run.agent_id == "gemini");
         let completed = output.is_some();
         let terminal_without_output = run.status == "running" && !process_alive && output.is_none();
 
@@ -236,17 +319,37 @@ pub(super) fn refresh_run_states_unlocked(
 
             if let Some(text) = output {
                 run.status = "completed".to_string();
-                let handoff = text.chars().take(12_000).collect::<String>();
+                let consultation = tasks
+                    .iter()
+                    .find(|task| task.id == run.task_id)
+                    .map(|task| task.kind == "consultation")
+                    .unwrap_or(false);
+                let limit = if consultation { 1_600 } else { 12_000 };
+                let handoff = text.chars().take(limit).collect::<String>();
                 if let Some(task) = tasks.iter_mut().find(|task| task.id == run.task_id) {
                     task.status = "review".to_string();
                     task.summary = handoff.clone();
                     task.updated_at = local_now_rfc3339();
+                    discussion.insert(
+                        0,
+                        ProjectDiscussionMessage {
+                            id: next_id("MSG"),
+                            thread_id: if task.thread_id.is_empty() {
+                                task.id.clone()
+                            } else {
+                                task.thread_id.clone()
+                            },
+                            author: run.agent_id.clone(),
+                            recipients: if task.reviewers.is_empty() {
+                                vec!["chatgpt".to_string()]
+                            } else {
+                                task.reviewers.clone()
+                            },
+                            message: handoff.clone(),
+                            created_at: local_now_rfc3339(),
+                        },
+                    );
                 }
-                let _ = append_system_message(
-                    &dir,
-                    &run.agent_id,
-                    format!("Agent handoff for {}:\n\n{}", run.task_id, handoff),
-                );
             } else {
                 run.status = "failed".to_string();
                 let error_text = fs::read_to_string(&run.error_path)
@@ -258,16 +361,18 @@ pub(super) fn refresh_run_states_unlocked(
                     task.summary = error.clone();
                     task.updated_at = local_now_rfc3339();
                 }
-                let _ =
-                    append_system_message(&dir, "system", format!("{} failed: {}", run.id, error));
             }
             changed = true;
         }
     }
 
     if changed {
+        if discussion.len() > 5_000 {
+            discussion.truncate(5_000);
+        }
         write_json(&runs_path, &runs)?;
         write_json(&tasks_path, &tasks)?;
+        write_json(&discussion_path, &discussion)?;
     }
 
     Ok(changed)
@@ -277,6 +382,10 @@ pub(super) fn ensure_dispatch_scope_is_safe(
     snapshot: &ProjectRoomSnapshot,
     task: &ProjectTask,
 ) -> Result<(), String> {
+    if task.kind == "consultation" {
+        return Ok(());
+    }
+
     for other in &snapshot.tasks {
         if other.id == task.id || !matches!(other.status.as_str(), "active" | "review") {
             continue;

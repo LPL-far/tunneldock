@@ -154,6 +154,10 @@ pub struct ProjectMemory {
     pub updated_at: String,
 }
 
+fn default_task_kind() -> String {
+    "work".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectTask {
     pub id: String,
@@ -164,6 +168,12 @@ pub struct ProjectTask {
     pub status: String,
     pub write_scope: Vec<String>,
     pub summary: String,
+    #[serde(default = "default_task_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub thread_id: String,
+    #[serde(default)]
+    pub auto_dispatch: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -206,6 +216,8 @@ pub struct ProjectRoomConfig {
     pub local_root: String,
     pub repo_root: String,
     pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub antigravity_cascade_id: Option<String>,
     pub remote: ProjectRemote,
     pub enabled: bool,
     #[serde(default = "default_keep_session_alive")]
@@ -239,6 +251,10 @@ pub struct AgentRun {
     pub agent_id: String,
     pub status: String,
     pub pid: Option<u32>,
+    #[serde(default)]
+    pub external_session_id: Option<String>,
+    #[serde(default)]
+    pub start_step: Option<usize>,
     pub started_at: String,
     pub finished_at: Option<String>,
     pub prompt_path: String,
@@ -287,7 +303,10 @@ pub struct CommandOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentCapacity, McpCallRecord, TunnelSettings, WorkspaceItem};
+    use super::{
+        AgentCapacity, AgentRun, McpCallRecord, ProjectRoomConfig, ProjectTask, TunnelSettings,
+        WorkspaceItem,
+    };
 
     #[test]
     fn old_history_records_default_workspace_identity_and_tokens() {
@@ -349,6 +368,43 @@ mod tests {
         let capacity: AgentCapacity =
             serde_json::from_str(legacy).expect("legacy capacity should still load");
         assert!(capacity.quota_windows.is_empty());
+    }
+
+    #[test]
+    fn legacy_project_room_records_get_new_collaboration_defaults() {
+        let task: ProjectTask = serde_json::from_str(
+            r#"{
+                "id":"TASK-1","title":"legacy","goal":"g","owner":"codex",
+                "reviewers":["chatgpt"],"status":"backlog","write_scope":[],
+                "summary":"","created_at":"x","updated_at":"x"
+            }"#,
+        )
+        .expect("legacy task should load");
+        assert_eq!(task.kind, "work");
+        assert!(task.thread_id.is_empty());
+        assert!(!task.auto_dispatch);
+
+        let config: ProjectRoomConfig = serde_json::from_str(
+            r#"{
+                "id":"p","name":"P","local_root":"D:\\\\p","repo_root":"D:\\\\p",
+                "workspace_id":null,"remote":{"host":"","root":"","environment":"","notes":""},
+                "enabled":true,"created_at":"x","updated_at":"x"
+            }"#,
+        )
+        .expect("legacy config should load");
+        assert_eq!(config.antigravity_cascade_id, None);
+        assert!(config.keep_session_alive);
+
+        let run: AgentRun = serde_json::from_str(
+            r#"{
+                "id":"RUN-1","task_id":"TASK-1","agent_id":"codex","status":"completed",
+                "pid":null,"started_at":"x","finished_at":"x","prompt_path":"p",
+                "output_path":"o","log_path":"l","error_path":"e","error_message":null
+            }"#,
+        )
+        .expect("legacy run should load");
+        assert_eq!(run.external_session_id, None);
+        assert_eq!(run.start_step, None);
     }
 
     #[test]

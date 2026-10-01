@@ -97,7 +97,7 @@ export const enUS: TranslationSchema = {
     task_title: "Task title",
     task_goal: "Goal / completion criteria",
     create_task: "Create Task",
-    discussion_placeholder: "Post to this Project Room; ChatGPT, Codex, and Gemini adapters will share this message bus.",
+    discussion_placeholder: "Post a short message to this Project Room; ChatGPT, Codex, and Gemini share the same collaboration bus.",
     send: "Send",
     new_experiment: "Record Experiment",
     hypothesis: "Hypothesis: why this experiment is worth running",

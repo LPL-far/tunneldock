@@ -100,6 +100,11 @@ export const TasksSection: React.FC<Props> = ({
               <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] text-zinc-500">
                 {task.status}
               </span>
+              {task.kind === "consultation" && (
+                <span className="rounded bg-sky-950/50 px-1.5 py-0.5 text-[10px] text-sky-400">
+                  consult
+                </span>
+              )}
             </div>
             <span className="text-[10px] font-mono text-zinc-500">
               {task.owner} → {task.reviewers.join(", ")}

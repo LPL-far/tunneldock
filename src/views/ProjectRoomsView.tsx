@@ -67,6 +67,9 @@ const emptyTask = (): ProjectTask => ({
   status: "backlog",
   write_scope: [],
   summary: "",
+  kind: "work",
+  thread_id: "",
+  auto_dispatch: false,
   created_at: "",
   updated_at: "",
 });

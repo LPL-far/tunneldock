@@ -116,6 +116,9 @@ export interface ProjectTask {
   status: string;
   write_scope: string[];
   summary: string;
+  kind: string;
+  thread_id: string;
+  auto_dispatch: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -151,6 +154,7 @@ export interface ProjectRoomConfig {
   local_root: string;
   repo_root: string;
   workspace_id: string | null;
+  antigravity_cascade_id: string | null;
   remote: ProjectRemote;
   enabled: boolean;
   keep_session_alive: boolean;
@@ -181,6 +185,8 @@ export interface AgentRun {
   agent_id: string;
   status: string;
   pid: number | null;
+  external_session_id: string | null;
+  start_step: number | null;
   started_at: string;
   finished_at: string | null;
   prompt_path: string;

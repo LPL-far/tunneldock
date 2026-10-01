@@ -95,7 +95,7 @@ export const zhCN = {
     task_title: "任务标题",
     task_goal: "目标 / 完成条件",
     create_task: "创建 Task",
-    discussion_placeholder: "向当前 Project Room 发送消息；后续由 ChatGPT / Codex / Gemini Adapter 接入同一消息总线",
+    discussion_placeholder: "向当前 Project Room 发送短消息；ChatGPT / Codex / Gemini 共用同一协作总线",
     send: "发送",
     new_experiment: "记录实验",
     hypothesis: "Hypothesis：为什么要跑这个实验",
