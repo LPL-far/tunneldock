@@ -1,0 +1,448 @@
+use super::*;
+
+pub(super) fn command_version(executable: &Path, args: &[&str]) -> Option<String> {
+    let mut command = Command::new(executable);
+    command.args(args);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+pub(super) fn find_codex_executable() -> Option<PathBuf> {
+    if let Some(path) = find_executable("codex") {
+        return Some(PathBuf::from(path));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let local = std::env::var_os("LOCALAPPDATA")?;
+        let bin_root = PathBuf::from(local)
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin");
+        let mut candidates = fs::read_dir(bin_root)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path().join("codex.exe"))
+            .filter(|path| path.exists())
+            .collect::<Vec<_>>();
+
+        candidates.sort_by_key(|path| fs::metadata(path).and_then(|meta| meta.modified()).ok());
+        candidates.pop()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+pub(super) fn find_antigravity_executable() -> Option<PathBuf> {
+    if let Some(path) = find_executable("antigravity") {
+        return Some(PathBuf::from(path));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let path = PathBuf::from(local)
+                .join("Programs")
+                .join("antigravity")
+                .join("Antigravity.exe");
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
+        let portable = PathBuf::from(r"D:\Antigravity\Antigravity\Antigravity.exe");
+        if portable.exists() {
+            return Some(portable);
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn antigravity_language_server_pid() -> Option<u32> {
+    use sysinfo::{ProcessesToUpdate, System};
+
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+
+    system.processes().iter().find_map(|(pid, process)| {
+        let name = process.name().to_string_lossy().to_ascii_lowercase();
+        (name == "language_server.exe" || name == "language_server").then(|| pid.as_u32())
+    })
+}
+
+pub(super) fn parse_antigravity_csrf_token(html: &str) -> Option<String> {
+    let marker = r#""csrfToken":""#;
+    let start = html.find(marker)? + marker.len();
+    let rest = &html[start..];
+    let end = rest.find('"')?;
+    let token = rest[..end].trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn listening_ports_for_pid(pid: u32) -> Vec<u16> {
+    let out = execute_cmd("netstat", &["-ano", "-p", "tcp"], None);
+    if !out.success {
+        return Vec::new();
+    }
+
+    let pid_text = pid.to_string();
+    let mut ports = out
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() < 5
+                || !fields[0].eq_ignore_ascii_case("TCP")
+                || !fields[3].eq_ignore_ascii_case("LISTENING")
+                || fields[4] != pid_text
+            {
+                return None;
+            }
+
+            let local = fields[1];
+            local.rsplit_once(':')?.1.parse::<u16>().ok()
+        })
+        .collect::<Vec<_>>();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+pub(super) fn parse_antigravity_quota_summary(
+    value: &serde_json::Value,
+) -> Option<(f64, Option<String>, Option<String>)> {
+    let groups = value.get("response")?.get("groups")?.as_array()?;
+    let group = groups.iter().find(|group| {
+        group
+            .get("displayName")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| name.to_ascii_lowercase().contains("gemini"))
+            .unwrap_or(false)
+    })?;
+    let buckets = group.get("buckets")?.as_array()?;
+
+    let (remaining, bucket) = buckets
+        .iter()
+        .filter(|bucket| {
+            !bucket
+                .get("disabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        })
+        .filter_map(|bucket| {
+            let remaining = bucket
+                .get("remainingFraction")
+                .and_then(serde_json::Value::as_f64)?;
+            Some((remaining, bucket))
+        })
+        .min_by(|(left, _), (right, _)| {
+            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+
+    Some((
+        (remaining * 100.0).clamp(0.0, 100.0),
+        bucket
+            .get("resetTime")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        group
+            .get("displayName")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+    ))
+}
+
+pub(super) fn antigravity_quota_capacity() -> Option<AgentCapacity> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        return None;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let pid = antigravity_language_server_pid()?;
+        let ports = listening_ports_for_pid(pid);
+        if ports.is_empty() {
+            return None;
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .ok()?;
+
+        let mut csrf_token = None;
+        for port in &ports {
+            for scheme in ["http", "https"] {
+                let url = format!("{}://127.0.0.1:{}/", scheme, port);
+                let response = match client.get(url).send() {
+                    Ok(response) if response.status().is_success() => response,
+                    _ => continue,
+                };
+                let Ok(html) = response.text() else {
+                    continue;
+                };
+                if let Some(token) = parse_antigravity_csrf_token(&html) {
+                    csrf_token = Some(token);
+                    break;
+                }
+            }
+            if csrf_token.is_some() {
+                break;
+            }
+        }
+        let csrf_token = csrf_token?;
+
+        let path = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
+        for port in ports {
+            for scheme in ["http", "https"] {
+                let url = format!("{}://127.0.0.1:{}{}", scheme, port, path);
+                let response = match client
+                    .post(url)
+                    .header("x-codeium-csrf-token", &csrf_token)
+                    .json(&serde_json::json!({ "forceRefresh": true }))
+                    .send()
+                {
+                    Ok(response) if response.status().is_success() => response,
+                    _ => continue,
+                };
+
+                let Ok(value) = response.json::<serde_json::Value>() else {
+                    continue;
+                };
+                let Some((remaining_percent, reset_at, model)) =
+                    parse_antigravity_quota_summary(&value)
+                else {
+                    continue;
+                };
+
+                return Some(AgentCapacity {
+                    agent_id: "gemini".to_string(),
+                    available: true,
+                    remaining_percent: Some(remaining_percent),
+                    reset_at,
+                    model,
+                    source: "antigravity_quota_summary".to_string(),
+                    confidence: "runtime_telemetry".to_string(),
+                    updated_at: local_now_rfc3339(),
+                });
+            }
+        }
+
+        None
+    }
+}
+
+pub(super) fn collect_jsonl_files(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth > 8 || out.len() >= 5000 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_jsonl_files(&path, depth + 1, out);
+        } else if path.extension().and_then(|value| value.to_str()) == Some("jsonl") {
+            out.push(path);
+        }
+    }
+}
+
+pub(super) fn parse_codex_rate_limit(value: &serde_json::Value) -> Option<(f64, Option<i64>)> {
+    let primary = value.get("payload")?.get("rate_limits")?.get("primary")?;
+    let used_percent = primary.get("used_percent")?.as_f64()?;
+    let resets_at = primary.get("resets_at").and_then(|value| value.as_i64());
+    Some(((100.0 - used_percent).clamp(0.0, 100.0), resets_at))
+}
+
+pub(super) fn system_time_local_rfc3339(time: std::time::SystemTime) -> String {
+    let local: chrono::DateTime<chrono::Local> = time.into();
+    local.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+}
+
+pub(super) fn latest_codex_capacity() -> AgentCapacity {
+    let now = local_now_rfc3339();
+    let executable = find_codex_executable();
+
+    let mut capacity = AgentCapacity {
+        agent_id: "codex".to_string(),
+        available: executable.is_some(),
+        remaining_percent: None,
+        reset_at: None,
+        model: None,
+        source: if executable.is_some() {
+            "runtime_detected".to_string()
+        } else {
+            "unavailable".to_string()
+        },
+        confidence: if executable.is_some() {
+            "availability_only".to_string()
+        } else {
+            "unavailable".to_string()
+        },
+        updated_at: now,
+    };
+
+    let Some(home) = dirs::home_dir() else {
+        return capacity;
+    };
+    let sessions_root = home.join(".codex").join("sessions");
+    let mut files = Vec::new();
+    collect_jsonl_files(&sessions_root, 0, &mut files);
+    files.sort_by_key(|path| fs::metadata(path).and_then(|meta| meta.modified()).ok());
+
+    for path in files.into_iter().rev().take(60) {
+        let source_modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+
+        for line in content.lines().rev() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let Some((remaining_percent, resets_at)) = parse_codex_rate_limit(&value) else {
+                continue;
+            };
+
+            capacity.available = true;
+            capacity.updated_at = source_modified
+                .map(system_time_local_rfc3339)
+                .unwrap_or_else(local_now_rfc3339);
+            capacity.reset_at = resets_at
+                .and_then(|epoch| chrono::DateTime::from_timestamp(epoch, 0))
+                .map(|utc| {
+                    utc.with_timezone(&chrono::Local)
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+                });
+            capacity.source = "codex_rollout_rate_limits".to_string();
+
+            let reset_expired = resets_at
+                .map(|epoch| epoch <= chrono::Utc::now().timestamp())
+                .unwrap_or(false);
+            let age = source_modified
+                .and_then(|modified| modified.elapsed().ok())
+                .unwrap_or_else(|| std::time::Duration::from_secs(u64::MAX));
+
+            if reset_expired {
+                capacity.remaining_percent = None;
+                capacity.confidence = "expired_runtime_telemetry".to_string();
+            } else {
+                capacity.remaining_percent = Some(remaining_percent);
+                capacity.confidence = if age <= std::time::Duration::from_secs(30 * 60) {
+                    "runtime_telemetry".to_string()
+                } else {
+                    "stale_runtime_telemetry".to_string()
+                };
+            }
+            return capacity;
+        }
+    }
+
+    capacity
+}
+
+pub(super) fn current_agent_capacities() -> Vec<AgentCapacity> {
+    let now = local_now_rfc3339();
+    let antigravity = find_antigravity_executable();
+    let gemini_capacity = antigravity_quota_capacity().unwrap_or_else(|| AgentCapacity {
+        agent_id: "gemini".to_string(),
+        available: antigravity.is_some(),
+        remaining_percent: None,
+        reset_at: None,
+        model: None,
+        source: if antigravity.is_some() {
+            "antigravity_runtime".to_string()
+        } else {
+            "unavailable".to_string()
+        },
+        confidence: if antigravity.is_some() {
+            "quota_unavailable".to_string()
+        } else {
+            "unavailable".to_string()
+        },
+        updated_at: now.clone(),
+    });
+
+    vec![
+        AgentCapacity {
+            agent_id: "chatgpt".to_string(),
+            available: true,
+            remaining_percent: None,
+            reset_at: None,
+            model: None,
+            source: "web_coordinator".to_string(),
+            confidence: "quota_unavailable".to_string(),
+            updated_at: now,
+        },
+        latest_codex_capacity(),
+        gemini_capacity,
+    ]
+}
+
+pub(super) fn agent_runtimes() -> Vec<AgentRuntimeInfo> {
+    let codex = find_codex_executable();
+    let antigravity = find_antigravity_executable();
+
+    vec![
+        AgentRuntimeInfo {
+            agent_id: "chatgpt".to_string(),
+            installed: true,
+            executable: None,
+            version: None,
+            dispatch_mode: "web_coordinator".to_string(),
+            notes: "ChatGPT 网页通过 OpenAI Tunnel + Chappie + Pi 进入当前 Project Room。"
+                .to_string(),
+        },
+        AgentRuntimeInfo {
+            agent_id: "codex".to_string(),
+            installed: codex.is_some(),
+            executable: codex
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            version: codex
+                .as_ref()
+                .and_then(|path| command_version(path, &["--version"])),
+            dispatch_mode: "headless_exec".to_string(),
+            notes: "Codex 使用非交互 exec worker；任务完成后写入 Project Room handoff。"
+                .to_string(),
+        },
+        AgentRuntimeInfo {
+            agent_id: "gemini".to_string(),
+            installed: antigravity.is_some(),
+            executable: antigravity
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            version: antigravity
+                .as_ref()
+                .and_then(|path| command_version(path, &["--version"])),
+            dispatch_mode: "interactive_chat".to_string(),
+            notes:
+                "Antigravity 打开项目专属 agent chat；视觉/探索任务优先，核心代码需 Codex review。"
+                    .to_string(),
+        },
+    ]
+}
