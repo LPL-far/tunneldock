@@ -191,6 +191,8 @@ pub struct ProjectTask {
     #[serde(default)]
     pub memory_committed: bool,
     #[serde(default)]
+    pub cleanup_committed: bool,
+    #[serde(default)]
     pub auto_dispatch: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -405,6 +407,7 @@ mod tests {
         assert!(task.consultation_id.is_empty());
         assert!(!task.web_reviewed);
         assert!(!task.memory_committed);
+        assert!(!task.cleanup_committed);
         assert!(!task.auto_dispatch);
 
         let config: ProjectRoomConfig = serde_json::from_str(

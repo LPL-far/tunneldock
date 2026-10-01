@@ -107,6 +107,17 @@ memory.commit
     ↓
 TunnelDock validates files were really updated after web review
     ↓
+ChatGPT Web performs cleanup/integration:
+- merge authoritative docs / remove stale claims
+- remove superseded code/scripts
+- delete disposable logs/cache/tmp/debug/scratch
+- archive only scientifically useful superseded material
+- retain logs only as unique reproducibility/debug evidence
+    ↓
+cleanup.commit
+    ↓
+TunnelDock scans and validates removed/archived/retained paths
+    ↓
 state=finalized
     ↓
 final human-facing consultation analysis / decision discussion
@@ -114,7 +125,9 @@ final human-facing consultation analysis / decision discussion
 
 `memory.commit` requires `PROJECT_STATE.md`, `SESSION_HANDOFF.md`, and at least one affected domain file. It is accepted only from ChatGPT Web after `consult.reviewed` and only when listed files exist, are non-empty, and have been modified after the web review.
 
-If the human later chooses a direction, ChatGPT Web records `decision.record`, updates the affected state/domain documents again, and can commit the updated memory for the same consultation.
+`cleanup.commit` is the final lifecycle gate. ChatGPT Web must check memory, documents, code, logs, and scratch across the Project Room. Typical stale/log/tmp candidates must be removed, archived, or explicitly retained. Removed paths must no longer exist; archived/retained paths must exist. A retained log must be unique evidence rather than routine output. The consultation does not finalize before this gate passes.
+
+If the human later chooses a direction, ChatGPT Web records `decision.record`, updates the affected state/domain documents again, and repeats memory/cleanup commit when the decision changes the project truth.
 
 ## Web context budget
 
@@ -126,4 +139,4 @@ If the human later chooses a direction, ChatGPT Web records `decision.record`, u
 - `.project_memory` is not a dataset/checkpoint/log storage directory.
 - Agent handoffs are not copied verbatim into canonical memory.
 - A worker recommendation is not automatically accepted truth.
-- A consultation is not complete merely because all workers answered; it is complete only after web review and canonical memory commit.
+- A consultation is not complete merely because all workers answered; it is complete only after web review, canonical memory commit, and cleanup/integration commit.

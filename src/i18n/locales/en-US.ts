@@ -113,7 +113,7 @@ export const enUS: TranslationSchema = {
     git_ready: "Local Git initialized",
     init_git: "Initialize Local Git",
     hygiene_title: "Hygiene Candidates",
-    hygiene_desc: "Scans for *_v2, *_old, backup, tmp and similar stale candidates. Nothing is deleted automatically; the project ChatGPT decides what is obsolete.",
+    hygiene_desc: "Scans version copies, backup/tmp/debug names, logs, and temporary artifacts. Final review must consolidate canonical docs and clean obsolete code/scripts/logs/scratch; retained items must be explicit archive or unique evidence.",
     scan: "Scan",
     no_hygiene_candidates: "No typical versioned or backup-name candidates found.",
     not_configured: "Not configured",

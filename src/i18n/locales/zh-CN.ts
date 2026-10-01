@@ -111,7 +111,7 @@ export const zhCN = {
     git_ready: "Local Git 已初始化",
     init_git: "初始化本地 Git",
     hygiene_title: "Hygiene Candidates",
-    hygiene_desc: "只扫描并列出 *_v2、*_old、backup、tmp 等候选，不自动删除；由项目 ChatGPT 判断是否已被当前实现取代。",
+    hygiene_desc: "扫描版本副本、backup/tmp/debug、日志与临时文件等候选。最终 review 必须整合权威文档、清理过时代码/脚本/日志/scratch；保留项必须是明确的归档或唯一证据。",
     scan: "扫描",
     no_hygiene_candidates: "当前没有发现典型的版本/备份命名候选。",
     not_configured: "未配置",

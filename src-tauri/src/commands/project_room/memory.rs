@@ -224,8 +224,10 @@ pub(super) fn default_memory_protocol() -> &'static str {
 2. TunnelDock waits for all requested workers and valid handoffs; partial results do not open the review gate.
 3. ChatGPT Web reads every valid worker handoff in full, inspects decisive code/source/evidence itself, and records `consult.reviewed`.
 4. ChatGPT Web updates `PROJECT_STATE.md`, `SESSION_HANDOFF.md`, and every affected domain memory file.
-5. ChatGPT Web records `memory.commit` listing the canonical files actually updated. TunnelDock rejects finalization if the consultation review is incomplete or required memory files were not updated.
-6. Only after the memory commit is accepted may the consultation be treated as finalized for the human decision flow.
+5. ChatGPT Web records `memory.commit` listing the canonical files actually updated. TunnelDock rejects it if the review is incomplete or required memory files were not updated.
+6. ChatGPT Web performs a final hygiene/integration pass across memory, documents, code, logs, and scratch. Superseded content is deleted or archived; retained logs/artifacts must be unique evidence.
+7. ChatGPT Web records `cleanup.commit`. TunnelDock scans the Project Room and rejects unresolved stale/log/tmp candidates unless they are explicitly archived or retained.
+8. Only after `cleanup.commit` is accepted may the consultation state become `finalized` for the human decision flow.
 
 ## Domain update rules
 - Model/method change -> update `MODEL_DESIGN.md` + state/handoff.
@@ -240,7 +242,7 @@ pub(super) fn default_memory_protocol() -> &'static str {
 Separate measured facts from interpretation. Every durable number should point to a reproducible result artifact. Every model/data claim should point to code/config/data/source evidence when practical. Do not copy raw worker handoffs or raw logs into memory.
 
 ## Hygiene
-Keep one authoritative current implementation/document. Do not create V1/V2/V3, *_old, *_backup, *_new, *_final copies. Use Git when the project permits it; otherwise keep one current tree and record source hashes/config/evidence. Delete disposable scratch after conclusions are captured.
+Cleanup is part of finishing work, not a future chore. Keep one authoritative current implementation/document; merge stale/current docs instead of leaving competing truth. Remove superseded code, abandoned scripts, temp/debug outputs, duplicate exports, stale caches, and disposable `.log/.tmp/.trace` files after replacement/evidence is verified. Retain a log only when it contains unique reproducibility/debug evidence and record why it is retained. Scientifically useful superseded material goes to the project's explicit archive and must stop claiming to be current. Do not create V1/V2/V3, *_old, *_backup, *_new, *_final copies. Use Git when permitted; otherwise keep one current tree and record source hashes/config/evidence.
 "#
 }
 

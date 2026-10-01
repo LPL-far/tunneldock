@@ -23,13 +23,13 @@ This project is optimized for top-conference research, not product feature accum
 - ChatGPT Web is the coordination surface, not the raw execution log. Keep normal replies compact: default to at most 6 short bullets or roughly 500 Chinese characters / 350 English words unless the user explicitly asks for a deep dive.
 - Never paste full tool output, full worker handoffs, long code excerpts, or complete experiment logs into the web conversation. Put detail in project files/artifacts and cite paths.
 - For multi-agent consultation, ChatGPT must wait for the consultation barrier. Never synthesize while `ready_for_review=false`. Once ready, read every successful worker handoff in full, then report only consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
-- After reading all settled worker evidence and completing its own review, ChatGPT must emit `consult.reviewed`, update canonical project memory, then emit `memory.commit`. A consultation is final only when the barrier state is `finalized`. If a worker failed/blocked, report it as missing evidence rather than inventing consensus.
+- After reading all settled worker evidence and completing its own review, ChatGPT must emit `consult.reviewed`, update canonical project memory and emit `memory.commit`, then perform cleanup/integration and emit `cleanup.commit`. A consultation is final only when the barrier state is `finalized`. If a worker failed/blocked, report it as missing evidence rather than inventing consensus.
 - Prefer one focused consultation round over open-ended agent-to-agent chatting. Start another round only when a concrete unresolved question remains.
 
 ## Review and decision rules
 - Gemini modifications to core model/training/data code require Codex review before acceptance.
 - Important Codex algorithm changes require ChatGPT review for research intent and methodological consistency.
-- ChatGPT Web must personally inspect the decisive diff/source before a human-facing code or method decision. Worker conclusions are inputs, not the final review. A consultation is not finalized until all requested workers are terminal, all successful handoffs were read in full, `consult.reviewed` was accepted, the relevant canonical memory files were updated, and `memory.commit` was accepted.
+- ChatGPT Web must personally inspect the decisive diff/source before a human-facing code or method decision. Worker conclusions are inputs, not the final review. A consultation is not finalized until all requested workers are terminal, all successful handoffs were read in full, `consult.reviewed` was accepted, canonical memory was updated and committed, and cleanup/integration was verified by `cleanup.commit`.
 - Keep the human-facing review compact: 2-4 decisive code findings, agent consensus/disagreement, at most 2-3 options with tradeoffs, and the exact question requiring the researcher's decision.
 - Agents may discuss and challenge each other. Disagreement should be preserved in Project Room discussion until a decision is made.
 - The human researcher remains the final decision maker. Only after the human explicitly decides should ChatGPT persist a `decision.record` to DECISIONS.md.
@@ -102,7 +102,24 @@ Use this after `consult.reviewed` and after ChatGPT Web has actually updated can
   "changed_files": ["PROJECT_STATE.md", "SESSION_HANDOFF.md", "MODEL_DESIGN.md"]
 }
 ```
-Only after the consultation state becomes `finalized` should ChatGPT give the human the final consultation conclusion.
+After `memory.commit`, the consultation moves to `awaiting_cleanup` rather than finalizing.
+
+## cleanup.commit
+Use this only after memory has been committed. ChatGPT Web must review and integrate five categories: `memory`, `documents`, `code`, `logs`, and `scratch`. `checked_paths` must include `.` so the entire Project Room is scanned. Paths listed as removed must truly be gone; archived/retained paths must exist; remaining hygiene candidates must be explicitly accounted for as archived or retained evidence.
+```json
+{
+  "kind": "cleanup.commit",
+  "author": "chatgpt",
+  "consultation_id": "CONSULTATION-...",
+  "reviewed_categories": ["memory", "documents", "code", "logs", "scratch"],
+  "checked_paths": ["."],
+  "removed_paths": ["tmp/debug.log", "research/obsolete_note.md"],
+  "archived_paths": ["research/archive/2026-10-02/old_design.md"],
+  "retained_paths": ["research/archive", "results/unique_failure.log"],
+  "summary": "Merged the current design into the canonical document, removed disposable logs/scratch and superseded code; retained only unique evidence and the explicit research archive."
+}
+```
+Only after TunnelDock accepts `cleanup.commit` and the consultation state becomes `finalized` should ChatGPT give the human the final consultation conclusion.
 
 ## decision.record
 Use this only after the human researcher has made the final decision. Record the durable conclusion, not the whole discussion.
@@ -161,11 +178,11 @@ Rules:
 - Do not edit `project_room.json` directly; it is generated state.
 - Do not use this inbox as a raw chat dump. Post only decisions, disagreements, review requests, handoffs, and reproducible evidence that another agent needs.
 - `consult.request` is read-only by default. Keep each worker's final answer under 1200 characters. TunnelDock assigns one `consultation_id` to the whole round and exposes a barrier in `web_context.json`.
-- ChatGPT must not synthesize or recommend from partial results. Poll only the lightweight `web_context.json`. If `state=invalid_handoff`, send one `consult.retry` for the listed `invalid_handoffs` and keep waiting. If the web turn must end before the gate opens, report only pending/invalid agents. Once `ready_for_review=true`, read every successful full handoff path, perform your own review, write `consult.reviewed`, update `PROJECT_STATE.md` + `SESSION_HANDOFF.md` + affected domain memory, write `memory.commit`, then wait until the consultation state is `finalized` before the final human-facing analysis.
+- ChatGPT must not synthesize or recommend from partial results. Poll only the lightweight `web_context.json`. If `state=invalid_handoff`, send one `consult.retry` for the listed `invalid_handoffs` and keep waiting. Once `ready_for_review=true`, read every successful full handoff, perform your own review, write `consult.reviewed`, update canonical memory and write `memory.commit`, then clean/integrate obsolete memory/docs/code/logs/scratch and write `cleanup.commit`. Wait until state=`finalized` before the final human-facing analysis.
 - If the two agents materially disagree, ChatGPT may issue one focused follow-up `consult.request` with the same `thread_id`. The follow-up gets a new `consultation_id`, so it has its own barrier. Avoid recursive debate unless the user explicitly asks for it.
 - Before asking the human to decide a code/method question, ChatGPT must personally inspect the relevant diff or source files and surface only the decisive code-review points; worker handoffs are evidence, not a substitute for review.
 - `decision.record` is written only after the human researcher explicitly decides. Keep it concise and durable; never record an unresolved recommendation as a decision.
-- Canonical research memory remains under `.project_memory/`; update it directly after meaningful decisions/results.
+- Canonical research memory remains under `.project_memory/`; update it directly after meaningful decisions/results. Finalization also requires cleanup/integration: superseded code/docs are removed or archived, disposable logs/scratch are deleted, and retained logs must be unique evidence.
 - Project isolation is strict. Never write an event into another project's inbox unless the user explicitly requests a cross-project handoff.
 "#
 }
@@ -292,6 +309,8 @@ fn consultation_barriers(tasks: &[ProjectTask], runs: &[AgentRun]) -> Vec<serde_
             ready_for_review && members.iter().all(|member| member.web_reviewed);
         let memory_commit_complete =
             web_review_complete && members.iter().all(|member| member.memory_committed);
+        let cleanup_commit_complete =
+            memory_commit_complete && members.iter().all(|member| member.cleanup_committed);
         let waiting_for = agents
             .iter()
             .filter(|agent| {
@@ -321,6 +340,7 @@ fn consultation_barriers(tasks: &[ProjectTask], runs: &[AgentRun]) -> Vec<serde_
             "ready_for_review": ready_for_review,
             "web_review_complete": web_review_complete,
             "memory_commit_complete": memory_commit_complete,
+            "cleanup_commit_complete": cleanup_commit_complete,
             "all_settled": all_settled,
             "has_failures": has_failures,
             "state": if !invalid_handoffs.is_empty() {
@@ -331,13 +351,15 @@ fn consultation_barriers(tasks: &[ProjectTask], runs: &[AgentRun]) -> Vec<serde_
                 if has_failures { "awaiting_web_review_with_failures" } else { "awaiting_web_review" }
             } else if !memory_commit_complete {
                 "awaiting_memory_commit"
+            } else if !cleanup_commit_complete {
+                "awaiting_cleanup"
             } else {
                 "finalized"
             },
             "waiting_for": waiting_for,
             "invalid_handoffs": invalid_handoffs,
             "agents": agents,
-            "review_rule": "Do not synthesize partial worker results. After ready_for_review=true, read every successful handoff in full, perform your own review, and write consult.reviewed. Then update PROJECT_STATE.md + SESSION_HANDOFF.md + every affected domain memory file and write memory.commit. Only state=finalized permits the final human-facing consultation analysis.",
+            "review_rule": "Do not synthesize partial worker results. After ready_for_review=true, read every successful handoff in full and write consult.reviewed. Then update canonical memory and write memory.commit. Finally clean/consolidate obsolete docs/code/logs/scratch and write cleanup.commit. Only state=finalized permits the final human-facing consultation analysis.",
         }));
     }
 
@@ -374,6 +396,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
                 "consultation_id": task.consultation_id,
                 "web_reviewed": task.web_reviewed,
                 "memory_committed": task.memory_committed,
+                "cleanup_committed": task.cleanup_committed,
                 "auto_dispatch": task.auto_dispatch,
                 "created_at": task.created_at,
                 "updated_at": task.updated_at,
@@ -508,6 +531,12 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             item.get("state").and_then(serde_json::Value::as_str) == Some("awaiting_memory_commit")
         })
         .count();
+    let awaiting_cleanups = web_consultations
+        .iter()
+        .filter(|item| {
+            item.get("state").and_then(serde_json::Value::as_str) == Some("awaiting_cleanup")
+        })
+        .count();
     let web_context = serde_json::json!({
         "config": &snapshot.config,
         "memory": {
@@ -536,7 +565,8 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             "invalid_handoff_consultations": invalid_handoff_consultations,
             "awaiting_web_reviews": awaiting_web_reviews,
             "awaiting_memory_commits": awaiting_memory_commits,
-            "rule": "A consultation is final only when state=finalized. Wait for workers, retry invalid handoffs, read every successful full handoff, perform your own review, write consult.reviewed, update canonical memory, then write memory.commit. Failed/blocked agents are missing evidence, never consensus."
+            "awaiting_cleanups": awaiting_cleanups,
+            "rule": "A consultation is final only when state=finalized. Wait for workers, review all handoffs, commit canonical memory, then clean/consolidate obsolete documents, code, logs and scratch and write cleanup.commit. Failed/blocked agents are missing evidence, never consensus."
         },
         "detail_sources": {
             "full_snapshot": bridge_dir.join(BRIDGE_FILE),
@@ -581,6 +611,123 @@ pub(super) fn event_string_array(value: &serde_json::Value, key: &str) -> Vec<St
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn normalize_cleanup_key(value: &str) -> String {
+    let mut key = value.trim().replace('\\', "/");
+    while key.starts_with("./") {
+        key = key[2..].to_string();
+    }
+    key.trim_end_matches('/').to_ascii_lowercase()
+}
+
+fn resolve_cleanup_path(root: &Path, value: &str) -> Result<PathBuf, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("cleanup path 不能为空".to_string());
+    }
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err(format!("cleanup path 必须相对 project root: {}", value));
+    }
+    for component in path.components() {
+        if matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        ) {
+            return Err(format!("cleanup path 越界: {}", value));
+        }
+    }
+    Ok(root.join(path))
+}
+
+fn cleanup_path_is_covered(path: &str, declared: &[String]) -> bool {
+    let key = normalize_cleanup_key(path);
+    declared.iter().any(|value| {
+        let parent = normalize_cleanup_key(value);
+        key == parent || (!parent.is_empty() && key.starts_with(&format!("{parent}/")))
+    })
+}
+
+fn validate_cleanup_commit(
+    root: &Path,
+    checked_paths: &[String],
+    removed_paths: &[String],
+    archived_paths: &[String],
+    retained_paths: &[String],
+    reviewed_categories: &[String],
+) -> Result<Vec<HygieneCandidate>, String> {
+    let required_categories = ["memory", "documents", "code", "logs", "scratch"];
+    for category in required_categories {
+        if !reviewed_categories
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(category))
+        {
+            return Err(format!(
+                "cleanup.commit 缺少 reviewed category: {}",
+                category
+            ));
+        }
+    }
+    if !checked_paths
+        .iter()
+        .any(|value| normalize_cleanup_key(value) == ".")
+    {
+        return Err(
+            "cleanup.commit 的 checked_paths 必须包含 '.'，确保检查整个 Project Room".to_string(),
+        );
+    }
+
+    for value in checked_paths {
+        let path = resolve_cleanup_path(root, value)?;
+        if !path.exists() {
+            return Err(format!("cleanup.commit checked path 不存在: {}", value));
+        }
+    }
+    for value in removed_paths {
+        let path = resolve_cleanup_path(root, value)?;
+        if path.exists() {
+            return Err(format!(
+                "cleanup.commit 标记 removed 但路径仍存在: {}",
+                value
+            ));
+        }
+    }
+    for value in archived_paths.iter().chain(retained_paths.iter()) {
+        let path = resolve_cleanup_path(root, value)?;
+        if !path.exists() {
+            return Err(format!(
+                "cleanup.commit 声明保留/归档但路径不存在: {}",
+                value
+            ));
+        }
+    }
+
+    let mut candidates = Vec::new();
+    scan_hygiene_dir(root, root, 0, &mut candidates);
+    let unresolved = candidates
+        .iter()
+        .filter(|candidate| {
+            !cleanup_path_is_covered(&candidate.path, archived_paths)
+                && !cleanup_path_is_covered(&candidate.path, retained_paths)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unresolved.is_empty() {
+        let preview = unresolved
+            .iter()
+            .take(12)
+            .map(|candidate| candidate.path.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "cleanup.commit 仍有未处理 hygiene 候选: {}",
+            preview
+        ));
+    }
+    Ok(candidates)
 }
 
 fn validate_memory_commit_files(
@@ -811,6 +958,7 @@ pub(super) fn process_project_event_unlocked(
                 task.summary.clear();
                 task.web_reviewed = false;
                 task.memory_committed = false;
+                task.cleanup_committed = false;
                 task.auto_dispatch = true;
                 task.updated_at = now.clone();
                 retried.push(task.owner.clone());
@@ -919,6 +1067,7 @@ pub(super) fn process_project_event_unlocked(
             for index in member_indexes {
                 tasks[index].web_reviewed = true;
                 tasks[index].memory_committed = false;
+                tasks[index].cleanup_committed = false;
                 tasks[index].updated_at = now.clone();
             }
             write_json(&tasks_path, &tasks)?;
@@ -1000,6 +1149,7 @@ pub(super) fn process_project_event_unlocked(
 
             for index in member_indexes {
                 tasks[index].memory_committed = true;
+                tasks[index].cleanup_committed = false;
                 tasks[index].updated_at = now.clone();
             }
             write_json(&tasks_path, &tasks)?;
@@ -1024,6 +1174,97 @@ pub(super) fn process_project_event_unlocked(
                         "Canonical memory committed for {}: {}",
                         consultation_id,
                         changed_files.join(", ")
+                    ),
+                    created_at: now,
+                },
+            );
+            if messages.len() > 5_000 {
+                messages.truncate(5_000);
+            }
+            write_json(&discussion_path, &messages)?;
+        }
+        "cleanup.commit" => {
+            if author != "chatgpt" {
+                return Err("cleanup.commit 只能由 ChatGPT Web 最终协调者提交".to_string());
+            }
+            let consultation_id = event_string(value, "consultation_id");
+            if consultation_id.is_empty() {
+                return Err("cleanup.commit 缺少 consultation_id".to_string());
+            }
+            let summary = event_string(value, "summary");
+            if summary.is_empty() {
+                return Err("cleanup.commit 缺少 summary".to_string());
+            }
+            let checked_paths = event_string_array(value, "checked_paths");
+            let removed_paths = event_string_array(value, "removed_paths");
+            let archived_paths = event_string_array(value, "archived_paths");
+            let retained_paths = event_string_array(value, "retained_paths");
+            let reviewed_categories = event_string_array(value, "reviewed_categories");
+
+            let tasks_path = dir.join(TASKS_FILE);
+            let mut tasks = read_json::<Vec<ProjectTask>>(&tasks_path)?;
+            let member_indexes = tasks
+                .iter()
+                .enumerate()
+                .filter(|(_, task)| {
+                    task.kind == "consultation" && consultation_group_id(task) == consultation_id
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            if member_indexes.is_empty() {
+                return Err(format!(
+                    "cleanup.commit 找不到 consultation_id: {}",
+                    consultation_id
+                ));
+            }
+            if member_indexes
+                .iter()
+                .any(|index| !tasks[*index].memory_committed)
+            {
+                return Err("cleanup.commit 拒绝提前提交：memory.commit 尚未完成".to_string());
+            }
+
+            let config = load_snapshot_unlocked(state, project_id)?.config;
+            let root = PathBuf::from(&config.local_root);
+            let candidates = validate_cleanup_commit(
+                &root,
+                &checked_paths,
+                &removed_paths,
+                &archived_paths,
+                &retained_paths,
+                &reviewed_categories,
+            )?;
+
+            for index in member_indexes {
+                tasks[index].cleanup_committed = true;
+                tasks[index].updated_at = now.clone();
+            }
+            write_json(&tasks_path, &tasks)?;
+
+            let discussion_path = dir.join(DISCUSSION_FILE);
+            let mut messages = read_json::<Vec<ProjectDiscussionMessage>>(&discussion_path)?;
+            let thread_id = tasks
+                .iter()
+                .find(|task| {
+                    task.kind == "consultation" && consultation_group_id(task) == consultation_id
+                })
+                .map(|task| task.thread_id.clone())
+                .unwrap_or_else(|| "cleanup-commit".to_string());
+            messages.insert(
+                0,
+                ProjectDiscussionMessage {
+                    id: next_id("MSG"),
+                    thread_id,
+                    author,
+                    recipients: vec!["all".to_string()],
+                    message: format!(
+                        "Cleanup committed for {}. removed={}, archived={}, retained={}, scanned_candidates={}. {}",
+                        consultation_id,
+                        removed_paths.len(),
+                        archived_paths.len(),
+                        retained_paths.len(),
+                        candidates.len(),
+                        summary
                     ),
                     created_at: now,
                 },
@@ -1085,6 +1326,7 @@ pub(super) fn process_project_event_unlocked(
                         consultation_id: consultation_id.clone(),
                         web_reviewed: false,
                         memory_committed: false,
+                        cleanup_committed: false,
                         auto_dispatch: true,
                         created_at: now.clone(),
                         updated_at: now.clone(),
@@ -1168,6 +1410,7 @@ pub(super) fn process_project_event_unlocked(
                     consultation_id: event_string(value, "consultation_id"),
                     web_reviewed: false,
                     memory_committed: false,
+                    cleanup_committed: false,
                     auto_dispatch,
                     created_at: now.clone(),
                     updated_at: now,
@@ -1452,7 +1695,7 @@ pub(super) fn reconcile_project_operational_state_once(
 
 #[cfg(test)]
 mod tests {
-    use super::{consultation_barriers, validate_memory_commit_files};
+    use super::{consultation_barriers, validate_cleanup_commit, validate_memory_commit_files};
     use crate::models::{AgentRun, ProjectTask};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1472,6 +1715,7 @@ mod tests {
             consultation_id: "CONSULTATION-1".to_string(),
             web_reviewed,
             memory_committed: false,
+            cleanup_committed: false,
             auto_dispatch: true,
             created_at: "2026-10-01T22:00:00+08:00".to_string(),
             updated_at: "2026-10-01T22:00:00+08:00".to_string(),
@@ -1554,8 +1798,15 @@ mod tests {
         tasks[0].memory_committed = true;
         tasks[1].memory_committed = true;
         let barriers = consultation_barriers(&tasks, &runs);
-        assert_eq!(barriers[0]["state"], "finalized");
+        assert_eq!(barriers[0]["state"], "awaiting_cleanup");
         assert_eq!(barriers[0]["memory_commit_complete"], true);
+        assert_eq!(barriers[0]["cleanup_commit_complete"], false);
+
+        tasks[0].cleanup_committed = true;
+        tasks[1].cleanup_committed = true;
+        let barriers = consultation_barriers(&tasks, &runs);
+        assert_eq!(barriers[0]["state"], "finalized");
+        assert_eq!(barriers[0]["cleanup_commit_complete"], true);
 
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -1591,6 +1842,36 @@ mod tests {
         ];
         validate_memory_commit_files(&root, &valid, reviewed_at)
             .expect("valid memory commit should pass");
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn cleanup_commit_requires_all_categories_and_resolves_hygiene_candidates() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tunneldock-cleanup-{nonce}"));
+        fs::create_dir_all(&root).expect("temp dir");
+        let log = root.join("debug.log");
+        fs::write(&log, "temporary log").expect("temp log");
+        let checked = vec![".".to_string()];
+        let categories = ["memory", "documents", "code", "logs", "scratch"]
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(validate_cleanup_commit(&root, &checked, &[], &[], &[], &categories,).is_err());
+
+        let retained = vec!["debug.log".to_string()];
+        validate_cleanup_commit(&root, &checked, &[], &[], &retained, &categories)
+            .expect("explicit retained evidence should pass");
+
+        fs::remove_file(&log).expect("remove log");
+        let removed = vec!["debug.log".to_string()];
+        validate_cleanup_commit(&root, &checked, &removed, &[], &[], &categories)
+            .expect("removed stale log should pass");
 
         fs::remove_dir_all(root).expect("cleanup");
     }

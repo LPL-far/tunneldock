@@ -89,7 +89,7 @@ pub(super) fn task_prompt(
     let response_rule = if is_consultation {
         "This is a consultation round. Keep the final response under 1200 characters and write the final handoff in plain English UTF-8. Give only: Facts, Interpretation/Disagreement, Recommendation, and the single most important uncertainty. Do not repeat logs or long code excerpts. The web coordinator will localize the final synthesis for the user."
     } else {
-        "Keep the final handoff concise. Do not paste raw logs or large code excerpts; point to files/artifacts instead."
+        "Keep the final handoff concise. Before handoff, clean the scope you touched: remove superseded code/scripts, disposable scratch and redundant logs; merge stale/current documentation into one authoritative document; retain a log only when it contains unique reproducibility/debug evidence and point to that evidence instead of pasting it. Do not paste raw logs or large code excerpts; point to files/artifacts and mention what was removed/consolidated/retained."
     };
     let workspace_rule = if agent_id == "codex" {
         "Continue using the workspace already bound to this Codex Desktop thread for code edits. The Project Room local root below is the coordination/memory root; do not migrate or duplicate the existing code workspace into it."

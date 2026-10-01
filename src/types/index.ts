@@ -127,6 +127,7 @@ export interface ProjectTask {
   consultation_id: string;
   web_reviewed: boolean;
   memory_committed: boolean;
+  cleanup_committed: boolean;
   auto_dispatch: boolean;
   created_at: string;
   updated_at: string;

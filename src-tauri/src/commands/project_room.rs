@@ -1078,7 +1078,7 @@ At the beginning of this web conversation:
    Then read only the relevant domain memory for the task: MODEL_DESIGN.md, DATA_CATALOG.md, EXPERIMENTS.md, RESULTS.md, REFERENCES.md, DOCUMENTS.md, or DECISIONS.md.
 5. Treat chat history as working memory only. Durable project files are the source of truth.
 6. When Codex/Gemini/ChatGPT need to exchange a durable question, disagreement, task, handoff, or experiment result, write one JSON event to '{local}\.tunneldock\inbox\' using INBOX_PROTOCOL.md. Never edit project_room.json directly.
-7. When you need independent opinions from Codex and Gemini, write one `consult.request` event. TunnelDock auto-dispatches the requested workers and assigns a `consultation_id`. Stay in the same tool turn and poll only lightweight `web_context.json`. Never synthesize partial worker results. If the consultation enters `state=invalid_handoff`, write one `consult.retry` for the listed `invalid_handoffs` and continue waiting on the same barrier. If the turn must end before the barrier opens, report only which agents are pending/invalid. Once `ready_for_review=true`, read every successful `agents[].handoff_path` in full, account for failed/blocked agents as missing evidence, perform your own review, and write `consult.reviewed`. Then update PROJECT_STATE.md, SESSION_HANDOFF.md, and every affected domain memory file, write `memory.commit`, and wait until the consultation state is `finalized` before giving me the final consultation analysis. A focused follow-up may reuse the same `thread_id`, but it gets a new consultation barrier.
+7. When you need independent opinions from Codex and Gemini, write one `consult.request` event. TunnelDock auto-dispatches the requested workers and assigns a `consultation_id`. Stay in the same tool turn and poll only lightweight `web_context.json`. Never synthesize partial worker results. If the consultation enters `state=invalid_handoff`, write one `consult.retry` for the listed `invalid_handoffs` and continue waiting on the same barrier. If the turn must end before the barrier opens, report only which agents are pending/invalid. Once `ready_for_review=true`, read every successful `agents[].handoff_path` in full, account for failed/blocked agents as missing evidence, perform your own review, and write `consult.reviewed`. Then update PROJECT_STATE.md, SESSION_HANDOFF.md, and every affected domain memory file and write `memory.commit`. After memory is accepted, clean/consolidate obsolete memory/docs/code/logs/scratch, write `cleanup.commit`, and wait until the consultation state is `finalized` before giving me the final consultation analysis. A focused follow-up may reuse the same `thread_id`, but it gets a new consultation barrier.
 8. For any code/method decision, do not act as a passive summarizer. Personally inspect the relevant diff/source through Pi before discussing the decision with me. Review only the decisive code points: intent alignment, data/control flow, correctness/boundaries, and test/evidence coverage.
 9. Before I decide, present a compact decision brief: (a) 2-4 code-review findings, (b) agent consensus/disagreement, (c) at most 2-3 realistic options with tradeoffs, and (d) your recommended direction plus the exact point that needs my decision. I remain the final decision maker.
 10. After I explicitly decide, write one `decision.record` inbox event so the durable conclusion enters DECISIONS.md. Never record a recommendation as if it were my decision.
@@ -1086,13 +1086,13 @@ At the beginning of this web conversation:
 Web response budget:
 - Keep normal web replies compact: at most 6 short bullets or roughly 350 English words unless I explicitly ask for detail.
 - Do not paste raw tool output, full worker handoffs, long logs, or large code excerpts. Put details in project files/artifacts and cite paths.
-- During a multi-agent consultation, do not give a substantive conclusion until the matching consultation state is `finalized` (workers complete, web review complete, canonical memory committed). Then report only code-review findings, consensus/disagreement, decisive evidence, decision options, and the next action. Do not quote both agents verbatim.
+- During a multi-agent consultation, do not give a substantive conclusion until the matching consultation state is `finalized` (workers complete, web review complete, canonical memory committed, cleanup/integration committed). Then report only code-review findings, consensus/disagreement, decisive evidence, decision options, and the next action. Do not quote both agents verbatim.
 - `web_context.json` is the default lightweight web snapshot. Read `project_room.json`, full memory, or run artifacts only when the current question actually needs them.
 
 Research operating rules:
 - The goal is top-conference research. Keep code and algorithms simple, explicit, and correct.
 - Do not create V1/V2/V3, *_old, *_backup, *_new, or *_final copies. Follow the project's own Git policy; if Git is disallowed, keep one current tree and record hashes/configs/evidence instead.
-- Remove obsolete files, temporary logs, superseded scripts, and stale documentation after replacement is verified.
+- After replacement/evidence is verified, consolidate the authoritative document and remove superseded code/scripts, disposable logs, caches, temp/debug artifacts, and scratch. Retain old material only as explicit archive or unique reproducibility/debug evidence.
 - Record meaningful experiments, including negative results.
 - Refine project memory after meaningful decisions/results instead of appending raw chat logs.
 - ChatGPT is the coordinator and quota-allocation brain.
@@ -1134,7 +1134,7 @@ TunnelDock workspace ID：{workspace}
    然后只按当前任务读取对应领域记忆：MODEL_DESIGN.md、DATA_CATALOG.md、EXPERIMENTS.md、RESULTS.md、REFERENCES.md、DOCUMENTS.md 或 DECISIONS.md。
 5. 对话历史只作为工作记忆；项目持久化文件才是 source of truth。
 6. ChatGPT / Codex / Gemini 需要跨 Agent 留下问题、分歧、任务、handoff 或实验结果时，按 INBOX_PROTOCOL.md 向 '{local}\.tunneldock\inbox\' 写入单个 JSON event；不得直接修改 project_room.json。
-7. 需要 Codex 与 Gemini 独立给意见时，只写一个 `consult.request`；TunnelDock 自动调度指定 Agent，并为这一轮生成独立 `consultation_id`。网页 GPT 必须留在当前工具轮里，只轻量轮询 `web_context.json`；严禁用部分 Agent 结果提前归纳。如果 consultation 进入 `state=invalid_handoff`，必须仅对 `invalid_handoffs` 中的 Agent 写一次 `consult.retry`，继续等待同一个 barrier。如果本轮确实无法等到 barrier 打开，只能告诉我还在等待/重试哪些 Agent，不能给实质性结论。`ready_for_review=true` 后，必须完整读取每个成功 Agent 的 `agents[].handoff_path`，把 failed/blocked Agent 视为缺失证据，再完成自己的 review 并写入 `consult.reviewed`。随后必须更新 PROJECT_STATE.md、SESSION_HANDOFF.md 和所有受影响的领域记忆文件，写入 `memory.commit`，并等待 consultation 的 state=`finalized` 后才能把最终分析发给我。若存在实质分歧，可复用同一 `thread_id` 追问一次，但新一轮拥有新的 consultation barrier。
+7. 需要 Codex 与 Gemini 独立给意见时，只写一个 `consult.request`；TunnelDock 自动调度指定 Agent，并为这一轮生成独立 `consultation_id`。网页 GPT 必须留在当前工具轮里，只轻量轮询 `web_context.json`；严禁用部分 Agent 结果提前归纳。如果 consultation 进入 `state=invalid_handoff`，必须仅对 `invalid_handoffs` 中的 Agent 写一次 `consult.retry`，继续等待同一个 barrier。如果本轮确实无法等到 barrier 打开，只能告诉我还在等待/重试哪些 Agent，不能给实质性结论。`ready_for_review=true` 后，必须完整读取每个成功 Agent 的 `agents[].handoff_path`，把 failed/blocked Agent 视为缺失证据，再完成自己的 review 并写入 `consult.reviewed`。随后必须更新 PROJECT_STATE.md、SESSION_HANDOFF.md 和所有受影响的领域记忆文件并写入 `memory.commit`。记忆提交后必须清理/整合过时记忆、文档、代码、日志和 scratch，写入 `cleanup.commit`，并等待 consultation 的 state=`finalized` 后才能把最终分析发给我。若存在实质分歧，可复用同一 `thread_id` 追问一次，但新一轮拥有新的 consultation barrier。
 8. 只要涉及代码/方法取舍，网页 GPT 不能只是转述 Agent 结论；必须通过 Pi 自己抽查相关 diff / 源码，再和我讨论。只抓决定性的代码点：研究意图是否一致、数据/控制流是否正确、边界/错误处理、测试/证据是否足够。
 9. 在让我拍板前，给一个极简决策包：(a) 2-4 个代码 review 要点，(b) Agent 共识/分歧，(c) 最多 2-3 个现实选项及代价，(d) 你的技术倾向和需要我决定的唯一关键点。我始终是最终决策者。
 10. 我明确做出决定后，写一个 `decision.record` inbox event，把最终结论持久化到 DECISIONS.md；不能把尚未确认的建议当成我的决定记录。
@@ -1142,13 +1142,13 @@ TunnelDock workspace ID：{workspace}
 网页回复上下文预算：
 - 默认每次网页回复最多 6 个短要点，或约 500 个中文字符；除非我明确要求展开。
 - 不在网页里粘贴原始工具输出、完整 worker handoff、长日志或大段代码；细节写入项目文件/产物，只返回路径和结论。
-- 多智能体咨询期间，在 matching consultation 进入 state=`finalized` 之前（Agent 完成 + 网页 review + canonical memory commit），不得给出实质性结论；完成后只汇总：代码 review 要点、共识/分歧、决定性证据、决策选项、下一步。不要逐字复述两个 Agent 的回答。
+- 多智能体咨询期间，在 matching consultation 进入 state=`finalized` 之前（Agent 完成 + 网页 review + canonical memory commit + cleanup/integration commit），不得给出实质性结论；完成后只汇总：代码 review 要点、共识/分歧、决定性证据、决策选项、下一步。不要逐字复述两个 Agent 的回答。
 - `web_context.json` 是网页端默认轻量快照；只有当前问题确实需要时才读取 `project_room.json`、完整 memory 或 run artifact。
 
 科研工作硬规则：
 - 目标是顶会论文；代码和算法表达必须简洁、逻辑清晰、可验证、正确。
 - 不创建 V1/V2/V3、*_old、*_backup、*_new、*_final 等平行旧版本；遵守项目自己的 Git 规则。允许 Git 时用本地 Git 保留历史；禁止 Git 时只保留当前代码树，并记录 source hash / config / evidence。
-- 替代实现验证后清理过时代码、临时日志、废弃脚本和失效文档。
+- 替代实现/证据验证后必须整合权威文档，并清理过时代码、废弃脚本、临时日志、cache、debug/tmp/scratch；旧内容只有作为明确归档或唯一复现/调试证据时才保留。
 - 有意义的实验都要记录，包括 negative result。
 - 重要决策/结果发生后要提炼更新项目记忆，而不是无限追加聊天记录。
 - ChatGPT 负责科研规划、任务拆解、额度综合调配、实验解释和最终 review。
@@ -1211,7 +1211,7 @@ pub fn initialize_project_git(
     Ok("initialized".to_string())
 }
 
-fn stale_name_reason(name: &str, is_dir: bool) -> Option<String> {
+pub(super) fn stale_name_reason(name: &str, is_dir: bool) -> Option<String> {
     let lower = name.to_ascii_lowercase();
     let dir_candidates = ["old", "backup", "archive", "tmp", "debug"];
     if is_dir && dir_candidates.contains(&lower.as_str()) {
@@ -1220,7 +1220,7 @@ fn stale_name_reason(name: &str, is_dir: bool) -> Option<String> {
 
     let file_markers = [
         "_v1", "_v2", "_v3", "-v1", "-v2", "-v3", "_old", "_backup", "_new", "_final", ".old",
-        ".bak",
+        ".bak", ".tmp", ".temp", ".log", ".trace",
     ];
     if file_markers.iter().any(|marker| lower.contains(marker)) {
         return Some(format!("文件名包含版本/备份标记: {}", name));
@@ -1229,7 +1229,12 @@ fn stale_name_reason(name: &str, is_dir: bool) -> Option<String> {
     None
 }
 
-fn scan_hygiene_dir(root: &Path, current: &Path, depth: usize, out: &mut Vec<HygieneCandidate>) {
+pub(super) fn scan_hygiene_dir(
+    root: &Path,
+    current: &Path,
+    depth: usize,
+    out: &mut Vec<HygieneCandidate>,
+) {
     if depth > 5 || out.len() >= 300 {
         return;
     }
