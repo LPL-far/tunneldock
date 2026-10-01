@@ -108,7 +108,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
                 )}
               </div>
               <p className="mt-1 text-xs text-zinc-500">
-                GitHub Releases · t59688/tunneldock
+                GitHub Releases · LPL-far/tunneldock
               </p>
             </div>
           </div>

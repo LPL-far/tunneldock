@@ -5,10 +5,10 @@
 </p>
 
 <p>
-  <a href="https://github.com/t59688/tunneldock/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/t59688/tunneldock?include_prereleases&display_name=tag" /></a>
+  <a href="https://github.com/LPL-far/tunneldock/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/LPL-far/tunneldock?include_prereleases&display_name=tag" /></a>
   <a href="./LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/License-GPLv3-blue.svg" /></a>
   <img alt="Platform: Windows | macOS | Linux" src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" />
-  <a href="https://github.com/t59688/tunneldock/actions/workflows/release.yml"><img alt="Release build" src="https://img.shields.io/github/actions/workflow/status/t59688/tunneldock/release.yml" /></a>
+  <a href="https://github.com/LPL-far/tunneldock/actions/workflows/release.yml"><img alt="Release build" src="https://img.shields.io/github/actions/workflow/status/LPL-far/tunneldock/release.yml" /></a>
 </p>
 
 **TunnelDock** 是一个基于 [Tauri 2](https://tauri.app/)（Rust）+ [React 19](https://react.dev/) + TypeScript 的桌面控制台，用于管理 **OpenAI Secure MCP Tunnel + Chappie + Pi** 三件套，让 **ChatGPT 网页版**直接读取、修改、构建和测试你电脑上的项目——无需公网 IP、无需域名、无需路由器端口转发，也不暴露任何本地 HTTP 服务。
@@ -78,7 +78,7 @@ OpenAI Secure MCP Tunnel
 
 ### 下载发布包
 
-前往 [Releases](https://github.com/t59688/tunneldock/releases) 下载最新版本：
+前往 [Releases](https://github.com/LPL-far/tunneldock/releases) 下载最新版本：
 
 | 平台 | 产物 |
 | --- | --- |
@@ -95,7 +95,7 @@ OpenAI Secure MCP Tunnel
 - 平台构建依赖，见 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)（例如 Linux 需 `libwebkit2gtk-4.1-dev` 等）
 
 ```bash
-git clone https://github.com/t59688/tunneldock.git
+git clone https://github.com/LPL-far/tunneldock.git
 cd tunneldock
 npm ci
 npm run tauri build
@@ -120,11 +120,11 @@ npm run tauri build
 | --- | --- |
 | `~/.chappie/tunnelkey.txt` | OpenAI Restricted API Key（控制面凭据） |
 | `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认由系统自动分配空闲端口）、MCP 目标（独立 `chappie` CLI） |
-| 系统数据目录下的 `TunnelDock/` | 工作区列表、应用设置、MCP 调用历史（Rust 端持久化，重启后保留） |
+| 系统数据目录下的 `TunnelDock/` | 工作区列表、非敏感应用设置、MCP 调用历史（敏感字段脱敏，最多保留最近 2000 条） |
 
 从旧版 `local-mcp-console/` 或更早的 `chappie-desktop/` 升级时，TunnelDock 会在首次启动时自动迁移上述应用数据；`~/.chappie/` 属于 Chappie/otunnel 兼容配置，不会随产品品牌改名。
 
-> 切勿将 `tunnelkey.txt` 或任何 API Key 提交到代码仓库。
+> Tunnel API Key 的唯一持久化来源是 `~/.chappie/tunnelkey.txt`；`settings.json` 不再保存密钥副本。切勿将该文件或任何 API Key 提交到代码仓库。
 
 ## 开发与构建
 
@@ -139,7 +139,7 @@ npm run tauri build
 ## 项目结构
 
 ```text
-hola/
+tunneldock/
 ├── src/                        # React 前端（Vite + TypeScript + Tailwind）
 │   ├── api/                    # Tauri invoke 命令封装
 │   ├── components/             # TitleBar / Header / Sidebar / TerminalDrawer / UpdateDialog
@@ -161,6 +161,7 @@ hola/
 
 - 不要以管理员 / root 身份运行 Pi；
 - 不要把 Tunnel API Key 或任何凭据提交到 Git；
+- MCP 审计会对常见密钥字段与 token 模式脱敏，但仍应避免主动让工具读取不必要的敏感文件；
 - 首次连接先做只读测试，确认工作目录（cwd）后再允许修改文件；
 - 多项目场景使用 `sessionId` 精确绑定，避免操作错项目；
 - 重要仓库保持 Git 工作区干净，便于审查与回滚；
@@ -170,7 +171,7 @@ hola/
 
 欢迎任何形式的贡献！
 
-1. 先 [提交 Issue](https://github.com/t59688/tunneldock/issues) 讨论 bug 或新功能；
+1. 先 [提交 Issue](https://github.com/LPL-far/tunneldock/issues) 讨论 bug 或新功能；
 2. Fork 本仓库，创建特性分支，发起 Pull Request；
 3. 请遵循现有代码风格：Rust 端使用 `rustfmt`，前端使用 TypeScript 严格模式；
 4. PR 描述中请说明改动目的，UI 变更请附截图。
@@ -185,8 +186,8 @@ hola/
 
 - [Tauri](https://tauri.app/) — 跨平台桌面应用框架
 - OpenAI Secure MCP Tunnel / `otunnel` — MCP 安全隧道
-- [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) — 本地编码代理与 MCP broker
-- [Chappie](https://www.npmjs.com/package/@zetaloop/chappie) — Pi 扩展，以 MCP 暴露会话 broker
+- [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) — 本地编码代理与项目 Session 运行时
+- [Chappie](https://www.npmjs.com/package/@zetaloop/chappie) — 独立 MCP Server、Session Broker 与 Pi 扩展
 - [linux.do](https://linux.do/) — 有意思的社区与技术交流平台
 
 ## 免责声明

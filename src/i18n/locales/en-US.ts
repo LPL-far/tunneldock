@@ -450,7 +450,7 @@ export const enUS: TranslationSchema = {
     principle_2: "Accurate Session binding: In ChatGPT, always use sessions → cwd → sessionId → init to bind specific projects; avoid cross-project pollution.",
     principle_3: "Background long-running tasks: For commands exceeding 30s like compilation or Docker builds, run them as background tasks to prevent MCP timeout.",
     card_updates_title: "Application Version & Updates",
-    card_updates_desc: "Automatically checks GitHub Releases from t59688/tunneldock. Update packages are downloaded in-app and verified with Tauri signatures before installation.",
+    card_updates_desc: "Automatically checks GitHub Releases from LPL-far/tunneldock. Update packages are downloaded in-app and verified with Tauri signatures before installation.",
     check_updates_btn: "Check for Updates",
     checking_btn: "Checking",
     view_version_btn: "View v{version}",

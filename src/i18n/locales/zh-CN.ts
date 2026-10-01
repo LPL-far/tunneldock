@@ -448,7 +448,7 @@ export const zhCN = {
     principle_2: "精准 Session 绑定：在 ChatGPT 中始终使用 sessions → cwd → sessionId → init 绑定具体工程，切勿跨项目串线。",
     principle_3: "耗时任务后台化：编译大型工程、打包 Docker 镜像等超过 30 秒的命令，建议使用后台任务执行，避免 MCP 请求超时。",
     card_updates_title: "应用版本与软件更新",
-    card_updates_desc: "启动后自动检查 t59688/tunneldock 的 GitHub Release。更新包在应用内部下载，并在安装前验证 Tauri 更新签名。",
+    card_updates_desc: "启动后自动检查 LPL-far/tunneldock 的 GitHub Release。更新包在应用内部下载，并在安装前验证 Tauri 更新签名。",
     check_updates_btn: "检查更新",
     checking_btn: "正在检查",
     view_version_btn: "查看 v{version}",

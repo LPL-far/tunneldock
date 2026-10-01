@@ -446,7 +446,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 {t("settings_view.release_source_label")}
               </div>
               <div className="text-zinc-300 truncate">
-                github.com/t59688/tunneldock
+                github.com/LPL-far/tunneldock
               </div>
             </div>
           </div>

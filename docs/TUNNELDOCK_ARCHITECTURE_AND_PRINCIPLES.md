@@ -214,19 +214,20 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
 ### 3.5 MCP 工具调用审计与数据分析
 
 ChatGPT 对本地发起的操作均属于高敏感操作。TunnelDock 内置了全量审计引擎（[`commands/history.rs`](../src-tauri/src/commands/history.rs) 与前端 `HistoryView.tsx`）：
-- **全要素记录**：记录每一次调用的时间戳、所属 Session、工具名称（`read`、`write`、`edit`、`bash`、`git` 等）、入参 JSON、执行耗时（毫秒）、执行状态（`success` / `executing` / `error`）以及执行结果摘要。
+- **全要素记录**：记录每一次调用的时间戳、所属 Session、工具名称（`read`、`write`、`edit`、`bash`、`git` 等）、入参 JSON、执行耗时（毫秒）、执行状态（`success` / `executing` / `error`）以及执行结果摘要；写盘前会递归脱敏 API Key、password、authorization、access token 等敏感字段，并识别常见 `sk-...` / Bearer token 模式。
 - **本地统计与聚合**：
   - 自动汇总总调用量、成功率百分比、平均响应时间；
   - 支持按工具分类（文件类、Shell 类、会话类）、按成功/失败状态精确过滤；
   - 支持基于入参或摘要的模糊检索；
-  - 支持将全量调用流水一键导出为标准的 `.json` 审计日志，供团队归档与追溯。
+  - 支持将当前保留的调用流水一键导出为标准的 `.json` 审计日志；
+  - 内存与磁盘统一最多保留最近 2000 条记录；tool start 只更新内存，tool end 再持久化，避免每次调用重复重写整份历史文件。
 
 ---
 
 ### 3.6 凭据隔离与动态配置渲染
 
 TunnelDock 采用最小权限与配置分层存储原则：
-- **凭据最小化暴露**：用户的 OpenAI Restricted API Key 存储在操作系统用户目录下的 `~/.chappie/tunnelkey.txt`，设置仅当前用户可读写，不与其他应用混合存储；
+- **凭据最小化暴露**：OpenAI Restricted API Key 的唯一持久化来源是操作系统用户目录下的 `~/.chappie/tunnelkey.txt`；TunnelDock 仅在运行时把密钥载入内存，`settings.json` 会将 `api_key` 持久化为空字符串，并自动迁移/清理旧版本留下的明文副本；
 - **动态配置同步引擎**：在 [`utils/paths.rs`](../src-tauri/src/utils/paths.rs) 中，任何设置变更（修改健康检查端口、切换 profile、更新 tunnel ID）都会触发自动渲染并同步更新 `~/.chappie/chappie.yaml`：
   ```yaml
   config_version: 1
