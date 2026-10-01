@@ -55,9 +55,7 @@ use agent_worker::{
 };
 use coordination::{reconcile_project_operational_state_once, sync_project_bridge};
 use memory::{ensure_project_memory, load_project_memory, project_memory_dir, save_project_memory};
-use telemetry::{
-    agent_runtimes, current_agent_capacities, find_antigravity_executable, find_codex_executable,
-};
+use telemetry::{agent_runtimes, current_agent_capacities, find_codex_executable};
 
 #[cfg(test)]
 use agent_worker::scopes_conflict;
@@ -530,7 +528,10 @@ pub fn dispatch_project_task(
     let executable = match agent_id.as_str() {
         "codex" => find_codex_executable().ok_or_else(|| "未找到 Codex CLI".to_string())?,
         "gemini" => {
-            find_antigravity_executable().ok_or_else(|| "未找到 Antigravity CLI".to_string())?
+            return Err(
+                "Antigravity Agent 已切换为 existing Cascade RPC 模式；请先完成 Project Room 的长期对话绑定，TunnelDock 不再启动便携 IDE/CLI。"
+                    .to_string(),
+            );
         }
         _ => unreachable!(),
     };

@@ -82,37 +82,23 @@ pub(super) fn find_codex_executable() -> Option<PathBuf> {
 }
 
 pub(super) fn find_antigravity_executable() -> Option<PathBuf> {
-    // TunnelDock integrates the Antigravity Agent/Agent Manager through its
-    // dedicated `chat --mode agent` CLI. A bare GUI executable is not enough:
-    // editor/manager installs without the chat CLI must not be treated as a
-    // dispatchable research worker.
-    if let Some(path) = find_executable("antigravity") {
-        let candidate = PathBuf::from(path);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
+    // The research worker is the installed Antigravity Agent / Agent Manager
+    // referenced by the user's Start Menu shortcut. Do not fall back to a
+    // portable IDE/CLI copy from PATH or D:\Antigravity.
     #[cfg(target_os = "windows")]
     {
-        let portable_cli = PathBuf::from(r"D:\Antigravity\Antigravity\bin\antigravity.cmd");
-        if portable_cli.exists() {
-            return Some(portable_cli);
-        }
-
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let local_cli = PathBuf::from(local)
-                .join("Programs")
-                .join("antigravity")
-                .join("bin")
-                .join("antigravity.cmd");
-            if local_cli.exists() {
-                return Some(local_cli);
-            }
-        }
+        let local = std::env::var_os("LOCALAPPDATA")?;
+        let agent = PathBuf::from(local)
+            .join("Programs")
+            .join("antigravity")
+            .join("Antigravity.exe");
+        agent.exists().then_some(agent)
     }
 
-    None
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -124,7 +110,17 @@ pub(super) fn antigravity_language_server_pid() -> Option<u32> {
 
     system.processes().iter().find_map(|(pid, process)| {
         let name = process.name().to_string_lossy().to_ascii_lowercase();
-        (name == "language_server.exe" || name == "language_server").then(|| pid.as_u32())
+        let executable = process
+            .exe()
+            .map(|path| {
+                path.to_string_lossy()
+                    .replace('/', "\\")
+                    .to_ascii_lowercase()
+            })
+            .unwrap_or_default();
+        let is_agent_server = executable.contains("\\programs\\antigravity\\resources\\bin\\");
+        ((name == "language_server.exe" || name == "language_server") && is_agent_server)
+            .then(|| pid.as_u32())
     })
 }
 
@@ -633,9 +629,9 @@ pub(super) fn agent_runtimes() -> Vec<AgentRuntimeInfo> {
             version: antigravity
                 .as_ref()
                 .and_then(|path| command_version(path, &["--version"])),
-            dispatch_mode: "agent_session".to_string(),
+            dispatch_mode: "cascade_rpc".to_string(),
             notes:
-                "Antigravity Agent / Agent Manager 使用 chat --mode agent 接收项目任务；不依赖 IDE。视觉/探索任务优先，核心代码需 Codex review。"
+                "Antigravity Agent / Agent Manager 通过已绑定的 Cascade 对话和本地 Language Server RPC 接收任务；不使用便携 IDE/CLI。视觉/探索任务优先，核心代码需 Codex review。"
                     .to_string(),
         },
     ]
