@@ -1,19 +1,20 @@
 mod audit;
+pub mod commands;
+pub mod i18n;
 pub mod models;
 pub mod state;
 mod tray;
 pub mod utils;
-pub mod commands;
-pub mod i18n;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use state::AppState;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::{Manager, WindowEvent};
 
 pub fn run() {
     let app_state = Arc::new(AppState::new());
     let state_exit = app_state.clone();
+    let project_supervisor_state = app_state.clone();
     let exit_cleanup_started = Arc::new(AtomicBool::new(false));
     let exit_cleanup_flag = exit_cleanup_started.clone();
     let close_lifecycle = Arc::new(tray::CloseLifecycle::default());
@@ -25,7 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .manage(close_lifecycle)
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -36,6 +37,17 @@ pub fn run() {
                 }
             }
             tray::setup(app, setup_lifecycle)?;
+
+            let supervisor_app = app.handle().clone();
+            let supervisor_state = project_supervisor_state.clone();
+            tauri::async_runtime::spawn(async move {
+                commands::project_room::project_session_supervisor_loop(
+                    supervisor_app,
+                    supervisor_state,
+                )
+                .await;
+            });
+
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -66,6 +78,22 @@ pub fn run() {
             commands::workspace::stop_workspace_session,
             commands::workspace::restart_workspace_session,
             commands::workspace::generate_chatgpt_prompt,
+            // Project Rooms
+            commands::project_room::list_project_rooms,
+            commands::project_room::get_project_room,
+            commands::project_room::update_project_config,
+            commands::project_room::update_project_memory,
+            commands::project_room::upsert_project_task,
+            commands::project_room::append_project_message,
+            commands::project_room::upsert_project_experiment,
+            commands::project_room::update_agent_capacity,
+            commands::project_room::list_agent_runtimes,
+            commands::project_room::refresh_agent_capacities,
+            commands::project_room::dispatch_project_task,
+            commands::project_room::refresh_project_runs,
+            commands::project_room::generate_project_room_prompt,
+            commands::project_room::initialize_project_git,
+            commands::project_room::scan_project_hygiene,
             // History
             commands::history::list_history,
             commands::history::clear_history,

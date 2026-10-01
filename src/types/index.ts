@@ -61,6 +61,152 @@ export interface WorkspaceItem {
   error_message: string | null;
 }
 
+export interface ProjectRemote {
+  host: string;
+  root: string;
+  environment: string;
+  notes: string;
+}
+
+export interface ProjectAgentPolicy {
+  agent_id: string;
+  display_name: string;
+  role: string;
+  strengths: string[];
+  risk_notes: string[];
+  review_rule: string;
+  enabled: boolean;
+}
+
+export interface AgentCapacity {
+  agent_id: string;
+  available: boolean;
+  remaining_percent: number | null;
+  reset_at: string | null;
+  model: string | null;
+  source: string;
+  confidence: string;
+  updated_at: string;
+}
+
+export interface ProjectMemory {
+  project_state: string;
+  session_handoff: string;
+  decisions: string;
+  experiments: string;
+  memory_protocol: string;
+  updated_at: string;
+}
+
+export interface ProjectTask {
+  id: string;
+  title: string;
+  goal: string;
+  owner: string;
+  reviewers: string[];
+  status: string;
+  write_scope: string[];
+  summary: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectDiscussionMessage {
+  id: string;
+  thread_id: string;
+  author: string;
+  recipients: string[];
+  message: string;
+  created_at: string;
+}
+
+export interface ProjectExperiment {
+  id: string;
+  hypothesis: string;
+  code_revision: string;
+  command: string;
+  config: string;
+  dataset: string;
+  metrics: string;
+  result: string;
+  analysis: string;
+  artifacts: string[];
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectRoomConfig {
+  id: string;
+  name: string;
+  local_root: string;
+  repo_root: string;
+  workspace_id: string | null;
+  remote: ProjectRemote;
+  enabled: boolean;
+  keep_session_alive: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectRoomSummary {
+  id: string;
+  name: string;
+  local_root: string;
+  repo_root: string;
+  workspace_id: string | null;
+  session_status: WorkspaceStatus;
+  session_id: string | null;
+  binding_count: number;
+  remote_configured: boolean;
+  git_initialized: boolean;
+  active_tasks: number;
+  experiments: number;
+  discussion_messages: number;
+  memory_updated_at: string;
+}
+
+export interface AgentRun {
+  id: string;
+  task_id: string;
+  agent_id: string;
+  status: string;
+  pid: number | null;
+  started_at: string;
+  finished_at: string | null;
+  prompt_path: string;
+  output_path: string;
+  log_path: string;
+  error_path: string;
+  error_message: string | null;
+}
+
+export interface AgentRuntimeInfo {
+  agent_id: string;
+  installed: boolean;
+  executable: string | null;
+  version: string | null;
+  dispatch_mode: string;
+  notes: string;
+}
+
+export interface ProjectRoomSnapshot {
+  config: ProjectRoomConfig;
+  memory: ProjectMemory;
+  agents: ProjectAgentPolicy[];
+  capacities: AgentCapacity[];
+  tasks: ProjectTask[];
+  experiments: ProjectExperiment[];
+  discussion: ProjectDiscussionMessage[];
+  runs: AgentRun[];
+}
+
+export interface HygieneCandidate {
+  path: string;
+  kind: string;
+  reason: string;
+}
+
 export interface McpCallRecord {
   id: string;
   timestamp: string;

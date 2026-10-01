@@ -1,8 +1,9 @@
 pub mod env;
+pub mod history;
 pub mod install;
-pub mod uninstall;
 pub mod operation;
 pub mod otunnel;
-pub mod workspace;
-pub mod history;
+pub mod project_room;
 pub mod settings;
+pub mod uninstall;
+pub mod workspace;

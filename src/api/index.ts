@@ -6,6 +6,17 @@ import {
   WorkspaceItem,
   McpCallRecord,
   TunnelSettings,
+  ProjectRoomSummary,
+  ProjectRoomSnapshot,
+  ProjectRoomConfig,
+  ProjectMemory,
+  ProjectTask,
+  ProjectDiscussionMessage,
+  ProjectExperiment,
+  AgentCapacity,
+  AgentRun,
+  AgentRuntimeInfo,
+  HygieneCandidate,
 } from "../types";
 
 // Environment API
@@ -109,6 +120,118 @@ export async function generateChatGptPrompt(
     path,
     sessionId: sessionId || null,
     locale: locale || null,
+  });
+}
+
+// Project Room API
+export async function listProjectRooms(): Promise<ProjectRoomSummary[]> {
+  return await invoke<ProjectRoomSummary[]>("list_project_rooms");
+}
+
+export async function getProjectRoom(
+  projectId: string
+): Promise<ProjectRoomSnapshot> {
+  return await invoke<ProjectRoomSnapshot>("get_project_room", { projectId });
+}
+
+export async function updateProjectConfig(
+  config: ProjectRoomConfig
+): Promise<ProjectRoomSnapshot> {
+  return await invoke<ProjectRoomSnapshot>("update_project_config", { config });
+}
+
+export async function updateProjectMemory(
+  projectId: string,
+  memory: ProjectMemory
+): Promise<ProjectMemory> {
+  return await invoke<ProjectMemory>("update_project_memory", {
+    projectId,
+    memory,
+  });
+}
+
+export async function upsertProjectTask(
+  projectId: string,
+  task: ProjectTask
+): Promise<ProjectTask> {
+  return await invoke<ProjectTask>("upsert_project_task", { projectId, task });
+}
+
+export async function appendProjectMessage(
+  projectId: string,
+  message: ProjectDiscussionMessage
+): Promise<ProjectDiscussionMessage> {
+  return await invoke<ProjectDiscussionMessage>("append_project_message", {
+    projectId,
+    message,
+  });
+}
+
+export async function upsertProjectExperiment(
+  projectId: string,
+  experiment: ProjectExperiment
+): Promise<ProjectExperiment> {
+  return await invoke<ProjectExperiment>("upsert_project_experiment", {
+    projectId,
+    experiment,
+  });
+}
+
+export async function updateAgentCapacity(
+  projectId: string,
+  capacity: AgentCapacity
+): Promise<AgentCapacity> {
+  return await invoke<AgentCapacity>("update_agent_capacity", {
+    projectId,
+    capacity,
+  });
+}
+
+export async function listAgentRuntimes(): Promise<AgentRuntimeInfo[]> {
+  return await invoke<AgentRuntimeInfo[]>("list_agent_runtimes");
+}
+
+export async function refreshAgentCapacities(): Promise<AgentCapacity[]> {
+  return await invoke<AgentCapacity[]>("refresh_agent_capacities");
+}
+
+export async function dispatchProjectTask(
+  projectId: string,
+  taskId: string,
+  agentId: string
+): Promise<AgentRun> {
+  return await invoke<AgentRun>("dispatch_project_task", {
+    projectId,
+    taskId,
+    agentId,
+  });
+}
+
+export async function refreshProjectRuns(
+  projectId: string
+): Promise<ProjectRoomSnapshot> {
+  return await invoke<ProjectRoomSnapshot>("refresh_project_runs", { projectId });
+}
+
+export async function generateProjectRoomPrompt(
+  projectId: string,
+  locale?: string | null
+): Promise<string> {
+  return await invoke<string>("generate_project_room_prompt", {
+    projectId,
+    locale: locale || null,
+  });
+}
+
+export async function initializeProjectGit(projectId: string): Promise<string> {
+  return await invoke<string>("initialize_project_git", { projectId });
+}
+
+export async function scanProjectHygiene(
+  projectId: string
+): Promise<HygieneCandidate[]> {
+  return await invoke<HygieneCandidate[]>("scan_project_hygiene", {
+    projectId,
   });
 }
 

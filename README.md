@@ -42,6 +42,7 @@
 | --- | --- |
 | **环境检测与安装** | 自动探测 8 项本机依赖（Node ≥ 26 / npm / Git / Rust / cargo-binstall / otunnel / Pi / Chappie），逐项展示状态与版本，支持单项或「自动安装全部缺失组件」，安装日志实时流式输出 |
 | **工作区与 Session** | 添加本地项目工作区（自动探测 Git 分支与未提交变更），管理 Pi Session 生命周期（启动 / 停止 / 重启），一键生成 ChatGPT 项目绑定提示词 |
+| **科研 Project Rooms** | 将 Point Tracking / IQA Agent / 3D+MLLM 作为彼此隔离的科研控制面；每个项目维护独立的本地/服务器映射、ChatGPT/Codex/Gemini 角色、任务、讨论、实验、额度遥测、Hygiene 检查和专属 ChatGPT 网页绑定提示 |
 | **健康度与 Doctor 诊断** | 实时展示 otunnel 守护进程状态、健康探针与网络延迟；一键 Doctor 深度体检（配置、Tunnel ID、凭据、MCP 可达性、控制面连接等 8 项），失败项附中文修复建议 |
 | **MCP 调用审计** | 全量记录 ChatGPT 发起的工具调用（工具名 / 参数 / 结果摘要 / 耗时 / 状态），全文搜索、按类型与状态筛选、统计卡片（调用数 / 成功率 / 平均耗时）、单条详情查看与 JSON 导出 |
 | **凭据与设置** | 编辑 Tunnel ID、OpenAI Restricted API Key、健康探针端口，保存后自动同步至 `~/.chappie/` |
@@ -70,9 +71,18 @@ OpenAI Secure MCP Tunnel
       ├── bash
       ├── git
       └── build / test
+              │
+              ▼
+       Project Room
+      ├── .project_memory/      ← 唯一持久化科研记忆
+      ├── Task / Discussion
+      ├── Experiment Registry
+      ├── Agent Capacity
+      ├── Local / Remote 映射
+      └── .tunneldock/ bridge   ← 给各 Agent 的只读协同快照/规则
 ```
 
-关键在于：本地 `otunnel` **主动**通过 HTTPS 出站连接 OpenAI 拉取 MCP 请求，再转发给独立的 `chappie` MCP Server；各项目中的 Pi Session 通过本地 Chappie Broker 注册和接受调用。网络方向始终是出站 443，一般不受防火墙、NAT 与路由器设置影响。
+关键在于：本地 `otunnel` **主动**通过 HTTPS 出站连接 OpenAI 拉取 MCP 请求，再转发给独立的 `chappie` MCP Server；各项目中的 Pi Session 通过本地 Chappie Broker 注册和接受调用。Project Room 额外读取本机 Codex rate-limit telemetry 与 Antigravity Language Server 的 Gemini quota summary，并标记数据来源、更新时间和可信度，供网页 ChatGPT 做额度综合调配。网络方向始终是出站 443，一般不受防火墙、NAT 与路由器设置影响。
 
 ## 安装
 
@@ -109,7 +119,7 @@ npm run tauri build
 2. **配置凭据** — 输入 **Tunnel ID** 与 **OpenAI Restricted API Key**（建议权限：`Tunnels: Read/Use`），应用将自动生成 `~/.chappie/tunnelkey.txt` 与 otunnel profile `chappie.yaml`。可在 [OpenAI 平台](https://platform.openai.com/) 创建 Tunnel 与 API Key（应用内提供直达链接）。
 3. **启动 Tunnel** — 点击顶栏「启动 Tunnel」，确认守护进程运行且健康探针通过。
 4. **添加工作区并启动 Session** — 在「工作区与 Session」添加项目路径，点击「启动 Session」（等效于在该目录运行 `pi --provider chappie --model chatgpt`）。
-5. **绑定 ChatGPT** — 点击「生成 ChatGPT 绑定提示词」，复制到 ChatGPT 网页版发送，即可让 ChatGPT 开始操作该本地项目。
+5. **进入科研 Project Rooms** — 分别进入 Point Tracking / IQA Agent / 3D+MLLM Room，维护独立科研记忆、任务、讨论、实验与 Agent 额度；使用「绑定 ChatGPT 网页」为每个项目生成独立网页对话启动提示。
 
 更完整的实践与故障排查，参见 [docs/OpenAI Tunnel + Chappie + Pi.md](docs/OpenAI%20Tunnel%20%2B%20Chappie%20%2B%20Pi.md)。
 关于系统设计、通信协议与底层核心原理解析，参见 [docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md](docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md)。
@@ -120,7 +130,9 @@ npm run tauri build
 | --- | --- |
 | `~/.chappie/tunnelkey.txt` | OpenAI Restricted API Key（控制面凭据） |
 | `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认由系统自动分配空闲端口）、MCP 目标（独立 `chappie` CLI） |
-| 系统数据目录下的 `TunnelDock/` | 工作区列表、非敏感应用设置、MCP 调用历史（敏感字段脱敏，最多保留最近 2000 条） |
+| 系统数据目录下的 `TunnelDock/` | 工作区列表、非敏感应用设置、MCP 调用历史，以及 Project Room 的 operational state（任务 / 讨论 / 实验 / quota telemetry） |
+| `<project>/.project_memory/` | 每个科研项目唯一的持久化科研记忆：`PROJECT_STATE.md` / `SESSION_HANDOFF.md` / `DECISIONS.md` / `EXPERIMENTS.md` / `MEMORY_PROTOCOL.md` |
+| `<project>/.tunneldock/` | 自动生成的 Project Room bridge、`CONSTITUTION.md` 与 `inbox/` 消息总线；ChatGPT / Codex / Antigravity 通过它共享任务、讨论、handoff 与实验记录 |
 
 从旧版 `local-mcp-console/` 或更早的 `chappie-desktop/` 升级时，TunnelDock 会在首次启动时自动迁移上述应用数据；`~/.chappie/` 属于 Chappie/otunnel 兼容配置，不会随产品品牌改名。
 
@@ -144,7 +156,7 @@ tunneldock/
 │   ├── api/                    # Tauri invoke 命令封装
 │   ├── components/             # TitleBar / Header / Sidebar / TerminalDrawer / UpdateDialog
 │   ├── hooks/                  # useAppUpdater 等
-│   ├── views/                  # 环境 / 工作区 / 健康度 / 审计 / 设置 五大页面
+│   ├── views/                  # 环境 / 工作区 / Project Rooms / 健康度 / 审计 / 设置
 │   └── types/                  # 共享类型
 ├── src-tauri/                  # Rust 后端
 │   ├── src/commands/           # env / workspace / otunnel / history / settings

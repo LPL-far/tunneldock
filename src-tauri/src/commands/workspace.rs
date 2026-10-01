@@ -243,11 +243,19 @@ pub async fn remove_workspace(
     Ok(true)
 }
 
-#[allow(clippy::manual_flatten)]
 #[tauri::command]
 pub async fn start_workspace_session(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
+    workspace_id: String,
+) -> Result<u32, String> {
+    start_workspace_session_inner(app, state.inner().clone(), workspace_id).await
+}
+
+#[allow(clippy::manual_flatten)]
+pub async fn start_workspace_session_inner(
+    app: AppHandle,
+    state: Arc<AppState>,
     workspace_id: String,
 ) -> Result<u32, String> {
     let (path_str, ws_name, locale) = {
@@ -266,7 +274,7 @@ pub async fn start_workspace_session(
     }
 
     // Stop existing process if any
-    let _ = stop_workspace_session(app.clone(), state.clone(), workspace_id.clone()).await;
+    let _ = stop_workspace_session_inner(app.clone(), state.clone(), workspace_id.clone()).await;
 
     let start_msg = if locale.starts_with("en") {
         format!(
@@ -369,7 +377,7 @@ pub async fn start_workspace_session(
         let app_handle = app.clone();
         let ws_id = workspace_id.clone();
         let workspace_name = ws_name.clone();
-        let state_clone = state.inner().clone();
+        let state_clone = state.clone();
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader};
             let reader = BufReader::new(out);
@@ -593,7 +601,7 @@ pub async fn start_workspace_session(
     {
         let app_handle = app.clone();
         let ws_id = workspace_id.clone();
-        let state_clone = state.inner().clone();
+        let state_clone = state.clone();
         std::thread::spawn(move || {
             let _ = child.wait();
 
@@ -665,6 +673,14 @@ pub async fn stop_workspace_session(
     state: State<'_, Arc<AppState>>,
     workspace_id: String,
 ) -> Result<bool, String> {
+    stop_workspace_session_inner(app, state.inner().clone(), workspace_id).await
+}
+
+pub async fn stop_workspace_session_inner(
+    app: AppHandle,
+    state: Arc<AppState>,
+    workspace_id: String,
+) -> Result<bool, String> {
     // 1. Close stdin to signal EOF to Pi process
     state.running_workspace_stdins.lock().remove(&workspace_id);
 
@@ -708,9 +724,10 @@ pub async fn restart_workspace_session(
     state: State<'_, Arc<AppState>>,
     workspace_id: String,
 ) -> Result<u32, String> {
-    let _ = stop_workspace_session(app.clone(), state.clone(), workspace_id.clone()).await;
+    let state = state.inner().clone();
+    let _ = stop_workspace_session_inner(app.clone(), state.clone(), workspace_id.clone()).await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    start_workspace_session(app, state, workspace_id).await
+    start_workspace_session_inner(app, state, workspace_id).await
 }
 
 #[tauri::command]

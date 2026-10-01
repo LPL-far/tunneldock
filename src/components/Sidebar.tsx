@@ -2,6 +2,7 @@ import React from "react";
 import {
   Cpu,
   Layers,
+  Boxes,
   Activity,
   History,
   Settings,
@@ -11,7 +12,13 @@ import { TunnelSettings } from "../types";
 import { APP_VERSION } from "../version";
 import { useTranslation } from "../i18n";
 
-export type NavTab = "env" | "workspaces" | "health" | "history" | "settings";
+export type NavTab =
+  | "env"
+  | "workspaces"
+  | "projects"
+  | "health"
+  | "history"
+  | "settings";
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -57,6 +64,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         activeWorkspacesCount > 0
           ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
           : "bg-zinc-800 text-zinc-400 border-zinc-700",
+    },
+    {
+      id: "projects" as NavTab,
+      label: t("sidebar.nav_projects"),
+      icon: Boxes,
+      badge: null,
+      badgeColor: "",
     },
     {
       id: "health" as NavTab,

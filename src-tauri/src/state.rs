@@ -21,12 +21,14 @@ pub struct AppState {
     pub workspaces: Arc<Mutex<Vec<WorkspaceItem>>>,
     pub running_workspace_pids: Arc<Mutex<HashMap<String, u32>>>,
     pub running_workspace_stdins: Arc<Mutex<HashMap<String, std::process::ChildStdin>>>,
+    pub running_agent_pids: Arc<Mutex<HashMap<String, u32>>>,
     pub otunnel_pid: Arc<Mutex<Option<u32>>>,
     pub otunnel_owned_pid: Arc<Mutex<Option<u32>>>,
     pub otunnel_health_url: Arc<Mutex<Option<String>>>,
     pub otunnel_health_url_file: Arc<Mutex<Option<PathBuf>>>,
     pub history: Arc<Mutex<Vec<McpCallRecord>>>,
     pub settings: Arc<Mutex<TunnelSettings>>,
+    pub project_store_lock: Arc<Mutex<()>>,
     pub app_data_dir: PathBuf,
     cleanup_started: AtomicBool,
 }
@@ -43,12 +45,14 @@ impl AppState {
             workspaces: Arc::new(Mutex::new(workspaces)),
             running_workspace_pids: Arc::new(Mutex::new(HashMap::new())),
             running_workspace_stdins: Arc::new(Mutex::new(HashMap::new())),
+            running_agent_pids: Arc::new(Mutex::new(HashMap::new())),
             otunnel_pid: Arc::new(Mutex::new(None)),
             otunnel_owned_pid: Arc::new(Mutex::new(None)),
             otunnel_health_url: Arc::new(Mutex::new(None)),
             otunnel_health_url_file: Arc::new(Mutex::new(None)),
             history: Arc::new(Mutex::new(history)),
             settings: Arc::new(Mutex::new(settings)),
+            project_store_lock: Arc::new(Mutex::new(())),
             app_data_dir,
             cleanup_started: AtomicBool::new(false),
         }
@@ -89,6 +93,10 @@ impl AppState {
         }
     }
 
+    pub fn cleanup_in_progress(&self) -> bool {
+        self.cleanup_started.load(Ordering::Acquire)
+    }
+
     pub fn cleanup_all_processes(&self) {
         // Shutdown can be observed through ExitRequested, Exit and Drop. Only the
         // first caller performs cleanup so we never wait on the same children more
@@ -124,6 +132,12 @@ impl AppState {
             .collect();
         self.running_workspace_pids.lock().clear();
         for pid in pids {
+            let _ = kill_process_tree(pid);
+        }
+
+        let agent_pids: Vec<u32> = self.running_agent_pids.lock().values().copied().collect();
+        self.running_agent_pids.lock().clear();
+        for pid in agent_pids {
             let _ = kill_process_tree(pid);
         }
 

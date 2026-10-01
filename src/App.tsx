@@ -11,6 +11,7 @@ import { Sidebar, NavTab } from "./components/Sidebar";
 import { TerminalDrawer } from "./components/TerminalDrawer";
 import { EnvironmentView } from "./views/EnvironmentView";
 import { WorkspaceView } from "./views/WorkspaceView";
+import { ProjectRoomsView } from "./views/ProjectRoomsView";
 import { HealthView } from "./views/HealthView";
 import { HistoryView } from "./views/HistoryView";
 import { SettingsView } from "./views/SettingsView";
@@ -395,6 +396,8 @@ export const App: React.FC = () => {
               onOpenTerminalForWorkspace={handleOpenTerminalForWs}
             />
           )}
+
+          {currentTab === "projects" && <ProjectRoomsView />}
 
           {currentTab === "health" && (
             <HealthView

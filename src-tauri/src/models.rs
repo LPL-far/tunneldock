@@ -102,6 +102,170 @@ pub struct TunnelSettings {
     pub locale: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ProjectRemote {
+    pub host: String,
+    pub root: String,
+    pub environment: String,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectAgentPolicy {
+    pub agent_id: String,
+    pub display_name: String,
+    pub role: String,
+    pub strengths: Vec<String>,
+    pub risk_notes: Vec<String>,
+    pub review_rule: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentCapacity {
+    pub agent_id: String,
+    pub available: bool,
+    pub remaining_percent: Option<f64>,
+    pub reset_at: Option<String>,
+    pub model: Option<String>,
+    pub source: String,
+    pub confidence: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectMemory {
+    pub project_state: String,
+    pub session_handoff: String,
+    pub decisions: String,
+    pub experiments: String,
+    pub memory_protocol: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectTask {
+    pub id: String,
+    pub title: String,
+    pub goal: String,
+    pub owner: String,
+    pub reviewers: Vec<String>,
+    pub status: String,
+    pub write_scope: Vec<String>,
+    pub summary: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectDiscussionMessage {
+    pub id: String,
+    pub thread_id: String,
+    pub author: String,
+    pub recipients: Vec<String>,
+    pub message: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectExperiment {
+    pub id: String,
+    pub hypothesis: String,
+    pub code_revision: String,
+    pub command: String,
+    pub config: String,
+    pub dataset: String,
+    pub metrics: String,
+    pub result: String,
+    pub analysis: String,
+    pub artifacts: Vec<String>,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+fn default_keep_session_alive() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectRoomConfig {
+    pub id: String,
+    pub name: String,
+    pub local_root: String,
+    pub repo_root: String,
+    pub workspace_id: Option<String>,
+    pub remote: ProjectRemote,
+    pub enabled: bool,
+    #[serde(default = "default_keep_session_alive")]
+    pub keep_session_alive: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectRoomSummary {
+    pub id: String,
+    pub name: String,
+    pub local_root: String,
+    pub repo_root: String,
+    pub workspace_id: Option<String>,
+    pub session_status: String,
+    pub session_id: Option<String>,
+    pub binding_count: u32,
+    pub remote_configured: bool,
+    pub git_initialized: bool,
+    pub active_tasks: usize,
+    pub experiments: usize,
+    pub discussion_messages: usize,
+    pub memory_updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentRun {
+    pub id: String,
+    pub task_id: String,
+    pub agent_id: String,
+    pub status: String,
+    pub pid: Option<u32>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub prompt_path: String,
+    pub output_path: String,
+    pub log_path: String,
+    pub error_path: String,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentRuntimeInfo {
+    pub agent_id: String,
+    pub installed: bool,
+    pub executable: Option<String>,
+    pub version: Option<String>,
+    pub dispatch_mode: String,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectRoomSnapshot {
+    pub config: ProjectRoomConfig,
+    pub memory: ProjectMemory,
+    pub agents: Vec<ProjectAgentPolicy>,
+    pub capacities: Vec<AgentCapacity>,
+    pub tasks: Vec<ProjectTask>,
+    pub experiments: Vec<ProjectExperiment>,
+    pub discussion: Vec<ProjectDiscussionMessage>,
+    pub runs: Vec<AgentRun>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HygieneCandidate {
+    pub path: String,
+    pub kind: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandOutput {
     pub success: bool,
