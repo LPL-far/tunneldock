@@ -26,26 +26,18 @@ struct RpcTarget {
     csrf_token: String,
 }
 
-fn rpc_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(4))
-        .build()
-        .map_err(|error| format!("创建 Antigravity RPC client 失败: {error}"))
-}
-
-fn rpc_target(client: &reqwest::blocking::Client) -> Result<RpcTarget, String> {
+fn rpc_target() -> Result<RpcTarget, String> {
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = client;
         Err("Antigravity Cascade RPC 当前仅支持 Windows".to_string())
     }
 
     #[cfg(target_os = "windows")]
     {
-        let pid = telemetry::antigravity_language_server_pid()
+        let (pid, csrf_token) = telemetry::antigravity_language_server_runtime()
             .ok_or_else(|| "未检测到 Antigravity Language Server".to_string())?;
+        let csrf_token = csrf_token
+            .ok_or_else(|| "Antigravity Language Server 启动参数缺少 CSRF token".to_string())?;
         let ports = telemetry::listening_ports_for_pid(pid);
         if ports.is_empty() {
             return Err("Antigravity Language Server 没有可用的本地 RPC 端口".to_string());
@@ -54,14 +46,15 @@ fn rpc_target(client: &reqwest::blocking::Client) -> Result<RpcTarget, String> {
         for port in ports {
             for scheme in ["https", "http"] {
                 let base_url = format!("{scheme}://127.0.0.1:{port}");
-                let response = match client.get(format!("{base_url}/")).send() {
-                    Ok(response) if response.status().is_success() => response,
-                    _ => continue,
-                };
-                let Ok(html) = response.text() else {
-                    continue;
-                };
-                if let Some(csrf_token) = telemetry::parse_antigravity_csrf_token(&html) {
+                let url = format!("{}{}/GetAllCascadeTrajectories", base_url, SERVICE_PREFIX);
+                if telemetry::local_json_post(
+                    &url,
+                    &csrf_token,
+                    &serde_json::json!({ "excludeSubtrajectories": true }),
+                    3,
+                )
+                .is_ok()
+                {
                     return Ok(RpcTarget {
                         base_url,
                         csrf_token,
@@ -70,38 +63,14 @@ fn rpc_target(client: &reqwest::blocking::Client) -> Result<RpcTarget, String> {
             }
         }
 
-        Err("无法发现 Antigravity Language Server RPC endpoint / CSRF token".to_string())
+        Err("无法发现 Antigravity Language Server RPC endpoint".to_string())
     }
 }
 
-fn rpc_post(
-    client: &reqwest::blocking::Client,
-    target: &RpcTarget,
-    method: &str,
-    body: &Value,
-) -> Result<Value, String> {
+fn rpc_post(target: &RpcTarget, method: &str, body: &Value) -> Result<Value, String> {
     let url = format!("{}{}/{}", target.base_url, SERVICE_PREFIX, method);
-    let response = client
-        .post(url)
-        .header("x-codeium-csrf-token", &target.csrf_token)
-        .json(body)
-        .send()
-        .map_err(|error| format!("Antigravity RPC {method} 请求失败: {error}"))?;
-    let status = response.status();
-    let text = response
-        .text()
-        .map_err(|error| format!("读取 Antigravity RPC {method} 响应失败: {error}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "Antigravity RPC {method} 返回 {status}: {}",
-            text.chars().take(1_000).collect::<String>()
-        ));
-    }
-    if text.trim().is_empty() {
-        return Ok(serde_json::json!({}));
-    }
-    serde_json::from_str(&text)
-        .map_err(|error| format!("解析 Antigravity RPC {method} 响应失败: {error}"))
+    telemetry::local_json_post(&url, &target.csrf_token, body, 6)
+        .map_err(|error| format!("Antigravity RPC {method} 失败: {error}"))
 }
 
 fn normalize_workspace_uri(value: &str) -> String {
@@ -117,12 +86,8 @@ fn normalize_workspace_uri(value: &str) -> String {
     normalized
 }
 
-fn cascade_summaries(
-    client: &reqwest::blocking::Client,
-    target: &RpcTarget,
-) -> Result<Vec<(String, Value)>, String> {
+fn cascade_summaries(target: &RpcTarget) -> Result<Vec<(String, Value)>, String> {
     let value = rpc_post(
-        client,
         target,
         "GetAllCascadeTrajectories",
         &serde_json::json!({ "excludeSubtrajectories": true }),
@@ -170,9 +135,8 @@ pub(super) fn resolve_cascade(
     local_root: &str,
     preferred_cascade_id: Option<&str>,
 ) -> Result<CascadeBinding, String> {
-    let client = rpc_client()?;
-    let target = rpc_target(&client)?;
-    let summaries = cascade_summaries(&client, &target)?;
+    let target = rpc_target()?;
+    let summaries = cascade_summaries(&target)?;
 
     if let Some(preferred) = preferred_cascade_id.filter(|value| !value.trim().is_empty()) {
         if let Some((id, summary)) = summaries
@@ -218,13 +182,11 @@ pub(super) fn resolve_cascade(
 }
 
 fn get_steps(
-    client: &reqwest::blocking::Client,
     target: &RpcTarget,
     cascade_id: &str,
     step_offset: usize,
 ) -> Result<Vec<Value>, String> {
     let value = rpc_post(
-        client,
         target,
         "GetCascadeTrajectorySteps",
         &serde_json::json!({
@@ -240,15 +202,11 @@ fn get_steps(
         .unwrap_or_default())
 }
 
-fn latest_cascade_config(
-    client: &reqwest::blocking::Client,
-    target: &RpcTarget,
-    binding: &CascadeBinding,
-) -> Result<Value, String> {
+fn latest_cascade_config(target: &RpcTarget, binding: &CascadeBinding) -> Result<Value, String> {
     let mut end = binding.step_count;
     for _ in 0..MAX_CONFIG_BATCHES {
         let start = end.saturating_sub(STEP_BATCH);
-        let steps = get_steps(client, target, &binding.cascade_id, start)?;
+        let steps = get_steps(target, &binding.cascade_id, start)?;
         if let Some(config) = steps.iter().rev().find_map(|step| {
             step.get("userInput")
                 .and_then(|user_input| user_input.get("userConfig"))
@@ -276,11 +234,9 @@ pub(super) fn send_task(binding: &CascadeBinding, prompt: &str) -> Result<(), St
         ));
     }
 
-    let client = rpc_client()?;
-    let target = rpc_target(&client)?;
-    let cascade_config = latest_cascade_config(&client, &target, binding)?;
+    let target = rpc_target()?;
+    let cascade_config = latest_cascade_config(&target, binding)?;
     rpc_post(
-        &client,
         &target,
         "SendUserCascadeMessage",
         &serde_json::json!({
@@ -318,9 +274,8 @@ fn final_response(steps: &[Value]) -> Option<String> {
 }
 
 pub(super) fn poll_run(cascade_id: &str, start_step: usize) -> Result<CascadeRunUpdate, String> {
-    let client = rpc_client()?;
-    let target = rpc_target(&client)?;
-    let summaries = cascade_summaries(&client, &target)?;
+    let target = rpc_target()?;
+    let summaries = cascade_summaries(&target)?;
     let Some((_, summary)) = summaries.iter().find(|(id, _)| id == cascade_id) else {
         return Ok(CascadeRunUpdate::Failed(format!(
             "Antigravity Cascade {} 已不存在",
@@ -332,7 +287,7 @@ pub(super) fn poll_run(cascade_id: &str, start_step: usize) -> Result<CascadeRun
         return Ok(CascadeRunUpdate::Running);
     }
 
-    let steps = get_steps(&client, &target, cascade_id, start_step)?;
+    let steps = get_steps(&target, cascade_id, start_step)?;
     if let Some(error) = steps.iter().rev().find_map(compact_error) {
         return Ok(CascadeRunUpdate::Failed(error));
     }

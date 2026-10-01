@@ -52,6 +52,83 @@ pub(super) fn command_version(executable: &Path, args: &[&str]) -> Option<String
     (!text.is_empty()).then_some(text)
 }
 
+pub(super) fn local_json_post(
+    url: &str,
+    csrf_token: &str,
+    body: &serde_json::Value,
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
+    let body_text = serde_json::to_string(body)
+        .map_err(|error| format!("序列化本地 RPC JSON 失败: {error}"))?;
+    let timeout = timeout_secs.max(1).to_string();
+    let csrf_header = format!("x-codeium-csrf-token: {csrf_token}");
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("curl.exe");
+    #[cfg(not(target_os = "windows"))]
+    let mut command = Command::new("curl");
+    command.args([
+        "-k",
+        "-sS",
+        "--max-time",
+        &timeout,
+        "-H",
+        &csrf_header,
+        "-H",
+        "content-type: application/json",
+        "--data-binary",
+        "@-",
+        "-w",
+        "\n%{http_code}",
+        url,
+    ]);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("启动 curl.exe 失败: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(body_text.as_bytes())
+            .map_err(|error| format!("写入 curl.exe 请求体失败: {error}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("等待 curl.exe 失败: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "本地 RPC curl 请求失败".to_string()
+        } else {
+            stderr
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (response_text, status_text) = stdout
+        .rsplit_once('\n')
+        .ok_or_else(|| "本地 RPC curl 响应缺少 HTTP 状态码".to_string())?;
+    let status = status_text
+        .trim()
+        .parse::<u16>()
+        .map_err(|error| format!("解析本地 RPC HTTP 状态码失败: {error}"))?;
+    if !(200..300).contains(&status) {
+        return Err(format!(
+            "本地 RPC 返回 HTTP {status}: {}",
+            response_text.chars().take(1_000).collect::<String>()
+        ));
+    }
+    if response_text.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(response_text)
+        .map_err(|error| format!("解析本地 RPC JSON 响应失败: {error}"))
+}
+
 pub(super) fn find_codex_executable() -> Option<PathBuf> {
     if let Some(path) = find_executable("codex") {
         return Some(PathBuf::from(path));
@@ -102,35 +179,33 @@ pub(super) fn find_antigravity_executable() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn antigravity_language_server_pid() -> Option<u32> {
-    use sysinfo::{ProcessesToUpdate, System};
+pub(super) fn antigravity_language_server_runtime() -> Option<(u32, Option<String>)> {
+    let script = r#"$p=Get-CimInstance Win32_Process | Where-Object {$_.Name -eq 'language_server.exe' -and $_.ExecutablePath -like '*\Programs\antigravity\resources\bin\*'} | Select-Object -First 1; if($p){ Write-Output ($p.ProcessId.ToString() + '|' + $p.CommandLine) }"#;
+    let output = execute_cmd("powershell", &["-NoProfile", "-Command", script], None);
+    if !output.success {
+        return None;
+    }
 
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::All, true);
-
-    system.processes().iter().find_map(|(pid, process)| {
-        let name = process.name().to_string_lossy().to_ascii_lowercase();
-        let executable = process
-            .exe()
-            .map(|path| {
-                path.to_string_lossy()
-                    .replace('/', "\\")
-                    .to_ascii_lowercase()
+    let line = output
+        .stdout
+        .lines()
+        .find(|line| !line.trim().is_empty())?
+        .trim();
+    let (pid_text, command_line) = line.split_once('|')?;
+    let pid = pid_text.trim().parse::<u32>().ok()?;
+    let parts = command_line.split_whitespace().collect::<Vec<_>>();
+    let csrf_token = parts
+        .windows(2)
+        .find(|pair| pair[0] == "--csrf_token")
+        .map(|pair| pair[1].to_string())
+        .or_else(|| {
+            parts.iter().find_map(|arg| {
+                arg.strip_prefix("--csrf_token=")
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
             })
-            .unwrap_or_default();
-        let is_agent_server = executable.contains("\\programs\\antigravity\\resources\\bin\\");
-        ((name == "language_server.exe" || name == "language_server") && is_agent_server)
-            .then(|| pid.as_u32())
-    })
-}
-
-pub(super) fn parse_antigravity_csrf_token(html: &str) -> Option<String> {
-    let marker = r#""csrfToken":""#;
-    let start = html.find(marker)? + marker.len();
-    let rest = &html[start..];
-    let end = rest.find('"')?;
-    let token = rest[..end].trim();
-    (!token.is_empty()).then(|| token.to_string())
+        });
+    Some((pid, csrf_token))
 }
 
 #[cfg(target_os = "windows")]
@@ -240,56 +315,23 @@ pub(super) fn antigravity_quota_capacity() -> Option<AgentCapacity> {
 
     #[cfg(target_os = "windows")]
     {
-        let pid = antigravity_language_server_pid()?;
+        let (pid, csrf_token) = antigravity_language_server_runtime()?;
+        let csrf_token = csrf_token?;
         let ports = listening_ports_for_pid(pid);
         if ports.is_empty() {
             return None;
         }
 
-        let client = reqwest::blocking::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .no_proxy()
-            .timeout(std::time::Duration::from_secs(2))
-            .build()
-            .ok()?;
-
-        let mut csrf_token = None;
-        for port in &ports {
-            for scheme in ["http", "https"] {
-                let url = format!("{}://127.0.0.1:{}/", scheme, port);
-                let response = match client.get(url).send() {
-                    Ok(response) if response.status().is_success() => response,
-                    _ => continue,
-                };
-                let Ok(html) = response.text() else {
-                    continue;
-                };
-                if let Some(token) = parse_antigravity_csrf_token(&html) {
-                    csrf_token = Some(token);
-                    break;
-                }
-            }
-            if csrf_token.is_some() {
-                break;
-            }
-        }
-        let csrf_token = csrf_token?;
-
         let path = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
         for port in ports {
-            for scheme in ["http", "https"] {
+            for scheme in ["https", "http"] {
                 let url = format!("{}://127.0.0.1:{}{}", scheme, port, path);
-                let response = match client
-                    .post(url)
-                    .header("x-codeium-csrf-token", &csrf_token)
-                    .json(&serde_json::json!({ "forceRefresh": true }))
-                    .send()
-                {
-                    Ok(response) if response.status().is_success() => response,
-                    _ => continue,
-                };
-
-                let Ok(value) = response.json::<serde_json::Value>() else {
+                let Ok(value) = local_json_post(
+                    &url,
+                    &csrf_token,
+                    &serde_json::json!({ "forceRefresh": true }),
+                    4,
+                ) else {
                     continue;
                 };
                 let Some((remaining_percent, reset_at, model, quota_windows)) =
