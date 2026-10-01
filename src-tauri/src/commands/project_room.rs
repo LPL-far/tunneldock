@@ -47,13 +47,14 @@ use std::os::windows::process::CommandExt;
 
 mod agent_worker;
 mod antigravity;
+mod codex;
 mod coordination;
 mod memory;
 mod telemetry;
 
 use agent_worker::{
-    append_system_message, build_worker_command, ensure_dispatch_scope_is_safe, next_id,
-    refresh_run_states_unlocked, run_dir, task_prompt,
+    append_system_message, ensure_dispatch_scope_is_safe, next_id, refresh_run_states_unlocked,
+    run_dir, task_prompt,
 };
 use coordination::{reconcile_project_operational_state_once, sync_project_bridge};
 use memory::{ensure_project_memory, load_project_memory, project_memory_dir, save_project_memory};
@@ -216,6 +217,7 @@ fn seed_configs(state: &AppState) -> Vec<ProjectRoomConfig> {
                 local_root: local_root.to_string(),
                 repo_root: local_root.to_string(),
                 workspace_id,
+                codex_thread_id: None,
                 antigravity_cascade_id: None,
                 remote: default_remote(id),
                 enabled: true,
@@ -531,46 +533,23 @@ pub(super) fn dispatch_project_task_unlocked(
 
     let (pid, external_session_id, start_step) = if agent_id == "codex" {
         let executable = find_codex_executable().ok_or_else(|| "未找到 Codex CLI".to_string())?;
-        let stdout = File::create(&log_path)
-            .map_err(|error| format!("创建 {} 失败: {}", log_path.display(), error))?;
-        let stderr = File::create(&error_path)
-            .map_err(|error| format!("创建 {} 失败: {}", error_path.display(), error))?;
-        let sandbox = if task.kind == "consultation" {
-            "read-only"
-        } else {
-            "workspace-write"
-        };
-        let mut args = vec![
-            "exec".to_string(),
-            "-C".to_string(),
-            snapshot.config.local_root.clone(),
-            "--sandbox".to_string(),
-            sandbox.to_string(),
-            "--skip-git-repo-check".to_string(),
-            "--json".to_string(),
-            "-o".to_string(),
-            output_path.to_string_lossy().to_string(),
-        ];
-        if let Some(model) = snapshot
-            .capacities
-            .iter()
-            .find(|capacity| capacity.agent_id == "codex")
-            .and_then(|capacity| capacity.model.as_ref())
-            .filter(|model| !model.trim().is_empty())
-        {
-            args.push("--model".to_string());
-            args.push(model.clone());
-        }
-        args.push(prompt.clone());
-
-        let cwd = PathBuf::from(&snapshot.config.local_root);
-        let mut command = build_worker_command(&executable, &args, &cwd, stdout, stderr);
-        let child = command
-            .spawn()
-            .map_err(|error| format!("启动 Codex worker 失败: {}", error))?;
-        let pid = child.id();
-        state.running_agent_pids.lock().insert(run_id.clone(), pid);
-        (Some(pid), None, None)
+        let thread_id = snapshot
+            .config
+            .codex_thread_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "Project Room {} 尚未绑定 Codex Thread ID；请在 Project Config 绑定你一直使用的 Codex Desktop 对话。",
+                    snapshot.config.name
+                )
+            })?;
+        let binding = codex::resolve_thread(thread_id)?;
+        let receipt = codex::queue_task(&executable, &binding, &prompt)?;
+        fs::write(&log_path, receipt)
+            .map_err(|error| format!("写入 {} 失败: {}", log_path.display(), error))?;
+        (None, Some(binding.thread_id), Some(binding.start_offset))
     } else {
         let binding = antigravity::resolve_cascade(
             &snapshot.config.local_root,
@@ -1335,6 +1314,7 @@ mod tests {
             local_root: root.to_string_lossy().to_string(),
             repo_root: root.to_string_lossy().to_string(),
             workspace_id: None,
+            codex_thread_id: None,
             antigravity_cascade_id: None,
             remote: ProjectRemote::default(),
             enabled: true,

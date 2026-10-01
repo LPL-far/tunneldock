@@ -91,6 +91,11 @@ pub(super) fn task_prompt(
     } else {
         "Keep the final handoff concise. Do not paste raw logs or large code excerpts; point to files/artifacts instead."
     };
+    let workspace_rule = if agent_id == "codex" {
+        "Continue using the workspace already bound to this Codex Desktop thread for code edits. The Project Room local root below is the coordination/memory root; do not migrate or duplicate the existing code workspace into it."
+    } else {
+        "Use the Project Room local root as the local project workspace."
+    };
 
     format!(
         r#"You are {agent} working inside TunnelDock Project Room "{project}".
@@ -102,7 +107,8 @@ Goal / completion criteria:
 {goal}
 
 Project boundaries:
-- Local root: {local}
+- Project Room local root: {local}
+- {workspace_rule}
 - Remote workspace: {remote_host}:{remote_root}
 - Project Room snapshot: {local}\.tunneldock\project_room.json
 - Constitution: {local}\.tunneldock\CONSTITUTION.md
@@ -144,52 +150,8 @@ Your final response must be a concise handoff with:
         reviewers = reviewers,
         handoff_delivery = handoff_delivery,
         response_rule = response_rule,
+        workspace_rule = workspace_rule,
     )
-}
-
-pub(super) fn build_worker_command(
-    executable: &Path,
-    args: &[String],
-    cwd: &Path,
-    stdout: File,
-    stderr: File,
-) -> Command {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let extension = executable
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-
-        if matches!(extension.as_str(), "cmd" | "bat") {
-            let mut command = Command::new("cmd.exe");
-            command.args(["/d", "/s", "/c"]);
-            command.arg(executable);
-            command.args(args);
-            command
-        } else {
-            let mut command = Command::new(executable);
-            command.args(args);
-            command
-        }
-    };
-
-    #[cfg(not(target_os = "windows"))]
-    let mut command = {
-        let mut command = Command::new(executable);
-        command.args(args);
-        command
-    };
-
-    command.current_dir(cwd).stdout(stdout).stderr(stderr);
-
-    #[cfg(target_os = "windows")]
-    {
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    command
 }
 
 pub(super) fn append_system_message(
@@ -234,6 +196,80 @@ pub(super) fn refresh_run_states_unlocked(
         }
 
         let output_path = PathBuf::from(&run.output_path);
+        if run.agent_id == "codex" && run.pid.is_none() && !output_path.exists() {
+            let Some(thread_id) = run.external_session_id.as_deref() else {
+                run.status = "failed".to_string();
+                run.finished_at = Some(local_now_rfc3339());
+                run.error_message = Some("Codex run 缺少 external_session_id".to_string());
+                changed = true;
+                continue;
+            };
+            let start_offset = run.start_step.unwrap_or_default();
+            let prompt = match fs::read_to_string(&run.prompt_path) {
+                Ok(prompt) => prompt,
+                Err(error) => {
+                    run.status = "failed".to_string();
+                    run.finished_at = Some(local_now_rfc3339());
+                    run.error_message = Some(format!("读取 Codex run prompt 失败: {error}"));
+                    changed = true;
+                    continue;
+                }
+            };
+            match codex::poll_run(thread_id, start_offset, &prompt) {
+                Ok(codex::CodexRunUpdate::Running) => continue,
+                Ok(codex::CodexRunUpdate::Completed(text)) => {
+                    run.error_message = None;
+                    fs::write(&output_path, text).map_err(|error| {
+                        format!("写入 {} 失败: {}", output_path.display(), error)
+                    })?;
+                }
+                Ok(codex::CodexRunUpdate::Failed(error)) => {
+                    run.status = "failed".to_string();
+                    run.finished_at = Some(local_now_rfc3339());
+                    run.error_message = Some(error.clone());
+                    if let Some(task) = tasks.iter_mut().find(|task| task.id == run.task_id) {
+                        task.status = "blocked".to_string();
+                        task.summary = error.chars().take(2_000).collect();
+                        task.updated_at = local_now_rfc3339();
+                    }
+                    discussion.insert(
+                        0,
+                        ProjectDiscussionMessage {
+                            id: next_id("MSG"),
+                            thread_id: tasks
+                                .iter()
+                                .find(|task| task.id == run.task_id)
+                                .map(|task| {
+                                    if task.thread_id.is_empty() {
+                                        task.id.clone()
+                                    } else {
+                                        task.thread_id.clone()
+                                    }
+                                })
+                                .unwrap_or_else(|| "agent-runs".to_string()),
+                            author: "system".to_string(),
+                            recipients: vec!["chatgpt".to_string()],
+                            message: format!(
+                                "codex failed: {}",
+                                error.chars().take(1_500).collect::<String>()
+                            ),
+                            created_at: local_now_rfc3339(),
+                        },
+                    );
+                    changed = true;
+                    continue;
+                }
+                Err(error) => {
+                    run.error_message = Some(format!(
+                        "Codex thread poll temporarily unavailable: {}",
+                        error.chars().take(1_000).collect::<String>()
+                    ));
+                    changed = true;
+                    continue;
+                }
+            }
+        }
+
         if run.agent_id == "gemini" && !output_path.exists() {
             let Some(cascade_id) = run.external_session_id.as_deref() else {
                 run.status = "failed".to_string();

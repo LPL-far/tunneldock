@@ -217,6 +217,8 @@ pub struct ProjectRoomConfig {
     pub repo_root: String,
     pub workspace_id: Option<String>,
     #[serde(default)]
+    pub codex_thread_id: Option<String>,
+    #[serde(default)]
     pub antigravity_cascade_id: Option<String>,
     pub remote: ProjectRemote,
     pub enabled: bool,
@@ -392,6 +394,7 @@ mod tests {
             }"#,
         )
         .expect("legacy config should load");
+        assert_eq!(config.codex_thread_id, None);
         assert_eq!(config.antigravity_cascade_id, None);
         assert!(config.keep_session_alive);
 

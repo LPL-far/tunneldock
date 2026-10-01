@@ -62,6 +62,24 @@ export const ConfigSection: React.FC<Props> = ({
       ))}
 
       <label className="block space-y-1.5">
+        <span className="text-[11px] text-zinc-500">Codex Thread ID</span>
+        <input
+          value={draft.codex_thread_id ?? ""}
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              codex_thread_id: event.target.value.trim() || null,
+            })
+          }
+          placeholder="existing Codex Desktop thread UUID"
+          className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs font-mono text-zinc-200"
+        />
+        <div className="text-[10px] text-zinc-600">
+          Project tasks resume this existing Codex conversation instead of creating a new one.
+        </div>
+      </label>
+
+      <label className="block space-y-1.5">
         <span className="text-[11px] text-zinc-500">
           Antigravity Cascade ID
         </span>

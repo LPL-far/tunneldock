@@ -616,8 +616,8 @@ pub(super) fn agent_runtimes() -> Vec<AgentRuntimeInfo> {
             version: codex
                 .as_ref()
                 .and_then(|path| command_version(path, &["--version"])),
-            dispatch_mode: "headless_exec".to_string(),
-            notes: "Codex 使用非交互 exec worker；任务完成后写入 Project Room handoff。"
+            dispatch_mode: "shared_app_server_queue".to_string(),
+            notes: "Codex 通过 shared app-server 的 queue 命令向 Project Room 已绑定的 Codex Desktop 长期对话投递任务，并从同一 thread 收集 handoff。"
                 .to_string(),
         },
         AgentRuntimeInfo {

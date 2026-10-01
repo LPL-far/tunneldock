@@ -154,6 +154,7 @@ export interface ProjectRoomConfig {
   local_root: string;
   repo_root: string;
   workspace_id: string | null;
+  codex_thread_id: string | null;
   antigravity_cascade_id: string | null;
   remote: ProjectRemote;
   enabled: boolean;
