@@ -25,11 +25,13 @@ This project is optimized for top-conference research, not product feature accum
 - For multi-agent consultation, ChatGPT should report only: consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
 - Prefer one focused consultation round over open-ended agent-to-agent chatting. Start another round only when a concrete unresolved question remains.
 
-## Review rules
+## Review and decision rules
 - Gemini modifications to core model/training/data code require Codex review before acceptance.
 - Important Codex algorithm changes require ChatGPT review for research intent and methodological consistency.
+- ChatGPT Web must personally inspect the decisive diff/source before a human-facing code or method decision. Worker conclusions are inputs, not the final review.
+- Keep the human-facing review compact: 2-4 decisive code findings, agent consensus/disagreement, at most 2-3 options with tradeoffs, and the exact question requiring the researcher's decision.
 - Agents may discuss and challenge each other. Disagreement should be preserved in Project Room discussion until a decision is made.
-- The human researcher remains the final decision maker.
+- The human researcher remains the final decision maker. Only after the human explicitly decides should ChatGPT persist a `decision.record` to DECISIONS.md.
 
 ## Project isolation
 - Do not import task state, memory, or decisions from another Project Room unless the user explicitly requests a cross-project handoff.
@@ -64,6 +66,20 @@ Use this when ChatGPT wants Codex and/or Gemini to independently inspect the sam
   "question": "Inspect current code and evidence independently. State facts, disagreement with the current interpretation if any, one recommendation, and the main uncertainty.",
   "agents": ["codex", "gemini"],
   "thread_id": "optional-existing-CONSULT-id-for-one-focused-follow-up"
+}
+```
+
+## decision.record
+Use this only after the human researcher has made the final decision. Record the durable conclusion, not the whole discussion.
+```json
+{
+  "kind": "decision.record",
+  "author": "chatgpt",
+  "title": "Keep geometry gate before decoder",
+  "decision": "Use the geometry gate in the main method and keep the ungated path only as an ablation.",
+  "rationale": "Matches the intended hypothesis and current evidence; the simpler ungated path remains useful only for ablation.",
+  "evidence": ["model/decoder.py", "EXP-..."],
+  "thread_id": "CONSULT-..."
 }
 ```
 
@@ -111,6 +127,8 @@ Rules:
 - Do not use this inbox as a raw chat dump. Post only decisions, disagreements, review requests, handoffs, and reproducible evidence that another agent needs.
 - `consult.request` is read-only by default. Keep each worker's final answer under 1200 characters; ChatGPT should synthesize rather than quote both answers back verbatim.
 - If the two agents materially disagree, ChatGPT may issue one focused follow-up `consult.request` with the same `thread_id`. Avoid recursive debate unless the user explicitly asks for it.
+- Before asking the human to decide a code/method question, ChatGPT must personally inspect the relevant diff or source files and surface only the decisive code-review points; worker handoffs are evidence, not a substitute for review.
+- `decision.record` is written only after the human researcher explicitly decides. Keep it concise and durable; never record an unresolved recommendation as a decision.
 - Canonical research memory remains under `.project_memory/`; update it directly after meaningful decisions/results.
 - Project isolation is strict. Never write an event into another project's inbox unless the user explicitly requests a cross-project handoff.
 "#
@@ -365,6 +383,63 @@ pub(super) fn process_project_event_unlocked(
                 messages.truncate(5_000);
             }
             write_json(&path, &messages)?;
+        }
+        "decision.record" => {
+            let title = event_string(value, "title");
+            let decision = event_string(value, "decision");
+            if title.is_empty() || decision.is_empty() {
+                return Err("decision.record 需要 title 和 decision".to_string());
+            }
+            let rationale = event_string(value, "rationale");
+            let evidence = event_string_array(value, "evidence");
+            let thread_id = event_string(value, "thread_id");
+            let memory_dir = project_memory_dir(&load_snapshot_unlocked(state, project_id)?.config);
+            let decisions_path = memory_dir.join(DECISIONS_FILE);
+            let mut current = fs::read_to_string(&decisions_path)
+                .unwrap_or_else(|_| "# Durable Decisions\n".to_string());
+            if current.contains("No durable decisions recorded yet.") {
+                current = current.replace("No durable decisions recorded yet.\n", "");
+            }
+            if !current.ends_with('\n') {
+                current.push('\n');
+            }
+            current.push_str(&format!(
+                "\n## {} — {}\n\n**Decision:** {}\n",
+                now, title, decision
+            ));
+            if !rationale.is_empty() {
+                current.push_str(&format!("\n**Rationale:** {}\n", rationale));
+            }
+            if !evidence.is_empty() {
+                current.push_str(&format!("\n**Evidence:** {}\n", evidence.join(", ")));
+            }
+            if !thread_id.is_empty() {
+                current.push_str(&format!("\n**Discussion thread:** {}\n", thread_id));
+            }
+            fs::write(&decisions_path, current)
+                .map_err(|error| format!("写入 {} 失败: {}", decisions_path.display(), error))?;
+
+            let discussion_path = dir.join(DISCUSSION_FILE);
+            let mut messages = read_json::<Vec<ProjectDiscussionMessage>>(&discussion_path)?;
+            messages.insert(
+                0,
+                ProjectDiscussionMessage {
+                    id: next_id("MSG"),
+                    thread_id: if thread_id.is_empty() {
+                        "decision".to_string()
+                    } else {
+                        thread_id
+                    },
+                    author,
+                    recipients: vec!["all".to_string()],
+                    message: format!("Decision recorded: {} — {}", title, decision),
+                    created_at: now,
+                },
+            );
+            if messages.len() > 5_000 {
+                messages.truncate(5_000);
+            }
+            write_json(&discussion_path, &messages)?;
         }
         "consult.request" => {
             let question = event_string(value, "question");
