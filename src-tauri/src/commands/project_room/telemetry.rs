@@ -1,6 +1,9 @@
 use super::*;
+use std::io::{BufRead, BufReader, Write};
+use std::sync::mpsc;
+use std::time::Duration;
 
-pub(super) fn command_version(executable: &Path, args: &[&str]) -> Option<String> {
+fn command_with_args(executable: &Path, args: &[&str]) -> Command {
     #[cfg(target_os = "windows")]
     let mut command = {
         let extension = executable
@@ -28,12 +31,17 @@ pub(super) fn command_version(executable: &Path, args: &[&str]) -> Option<String
         command
     };
 
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
     #[cfg(target_os = "windows")]
     {
         command.creation_flags(CREATE_NO_WINDOW);
     }
+
+    command
+}
+
+pub(super) fn command_version(executable: &Path, args: &[&str]) -> Option<String> {
+    let mut command = command_with_args(executable, args);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let output = command.output().ok()?;
     if !output.status.success() {
@@ -311,6 +319,124 @@ pub(super) fn parse_codex_rate_limit(value: &serde_json::Value) -> Option<(f64, 
     Some(((100.0 - used_percent).clamp(0.0, 100.0), resets_at))
 }
 
+pub(super) fn parse_codex_app_server_rate_limits(
+    value: &serde_json::Value,
+) -> Option<(f64, Option<i64>, Option<String>)> {
+    let result = value.get("result")?;
+    let rate_limits = result
+        .get("rateLimitsByLimitId")
+        .and_then(|limits| limits.get("codex"))
+        .or_else(|| result.get("rateLimits"))?;
+    let primary = rate_limits.get("primary")?;
+    let used_percent = primary
+        .get("usedPercent")
+        .and_then(serde_json::Value::as_f64)?;
+    let resets_at = primary.get("resetsAt").and_then(serde_json::Value::as_i64);
+    let model = rate_limits
+        .get("normalModelSlug")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            rate_limits
+                .get("limitName")
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            rate_limits
+                .get("limitId")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(ToOwned::to_owned);
+
+    Some(((100.0 - used_percent).clamp(0.0, 100.0), resets_at, model))
+}
+
+pub(super) fn live_codex_capacity(executable: &Path) -> Option<AgentCapacity> {
+    let mut command = command_with_args(executable, &["app-server", "--stdio"]);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    let mut child = command.spawn().ok()?;
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+
+    let initialize = serde_json::json!({
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientInfo": {
+                "name": "tunneldock",
+                "version": env!("CARGO_PKG_VERSION")
+            },
+            "capabilities": {
+                "experimentalApi": true
+            }
+        }
+    });
+    let rate_limits = serde_json::json!({
+        "id": 2,
+        "method": "account/rateLimits/read",
+        "params": {
+            "excludeResetCreditDetails": true
+        }
+    });
+
+    let request_written = writeln!(stdin, "{}", initialize)
+        .and_then(|_| writeln!(stdin, "{}", rate_limits))
+        .and_then(|_| stdin.flush())
+        .is_ok();
+    if !request_written {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if value.get("id").and_then(serde_json::Value::as_i64) == Some(2) {
+                let _ = sender.send(value);
+                break;
+            }
+        }
+    });
+
+    let response = receiver.recv_timeout(Duration::from_secs(5)).ok();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let (remaining_percent, resets_at, model) =
+        parse_codex_app_server_rate_limits(response.as_ref()?)?;
+
+    Some(AgentCapacity {
+        agent_id: "codex".to_string(),
+        available: true,
+        remaining_percent: Some(remaining_percent),
+        reset_at: resets_at
+            .and_then(|epoch| chrono::DateTime::from_timestamp(epoch, 0))
+            .map(|utc| {
+                utc.with_timezone(&chrono::Local)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+            }),
+        model,
+        source: "codex_app_server_rate_limits".to_string(),
+        confidence: "runtime_telemetry".to_string(),
+        updated_at: local_now_rfc3339(),
+    })
+}
+
 pub(super) fn system_time_local_rfc3339(time: std::time::SystemTime) -> String {
     let local: chrono::DateTime<chrono::Local> = time.into();
     local.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
@@ -400,6 +526,11 @@ pub(super) fn latest_codex_capacity() -> AgentCapacity {
 
 pub(super) fn current_agent_capacities() -> Vec<AgentCapacity> {
     let now = local_now_rfc3339();
+    let codex = find_codex_executable();
+    let codex_capacity = codex
+        .as_deref()
+        .and_then(live_codex_capacity)
+        .unwrap_or_else(latest_codex_capacity);
     let antigravity = find_antigravity_executable();
     let gemini_capacity = antigravity_quota_capacity().unwrap_or_else(|| AgentCapacity {
         agent_id: "gemini".to_string(),
@@ -431,7 +562,7 @@ pub(super) fn current_agent_capacities() -> Vec<AgentCapacity> {
             confidence: "quota_unavailable".to_string(),
             updated_at: now,
         },
-        latest_codex_capacity(),
+        codex_capacity,
         gemini_capacity,
     ]
 }

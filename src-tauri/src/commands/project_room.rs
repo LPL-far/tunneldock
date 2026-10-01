@@ -63,7 +63,8 @@ use telemetry::{
 use agent_worker::scopes_conflict;
 #[cfg(test)]
 use telemetry::{
-    parse_antigravity_csrf_token, parse_antigravity_quota_summary, parse_codex_rate_limit,
+    parse_antigravity_csrf_token, parse_antigravity_quota_summary,
+    parse_codex_app_server_rate_limits, parse_codex_rate_limit,
 };
 
 fn projects_root(state: &AppState) -> PathBuf {
@@ -1303,8 +1304,9 @@ pub fn scan_project_hygiene(
 mod tests {
     use super::{
         discover_nested_git_roots, ensure_project_memory, load_project_memory,
-        parse_antigravity_csrf_token, parse_antigravity_quota_summary, parse_codex_rate_limit,
-        scopes_conflict, stale_name_reason, ProjectRemote, ProjectRoomConfig,
+        parse_antigravity_csrf_token, parse_antigravity_quota_summary,
+        parse_codex_app_server_rate_limits, parse_codex_rate_limit, scopes_conflict,
+        stale_name_reason, ProjectRemote, ProjectRoomConfig,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1389,6 +1391,40 @@ mod tests {
         assert_eq!(remaining, 42.0);
         assert_eq!(reset, Some(1791047782));
         assert!(parse_codex_rate_limit(&serde_json::json!({"payload": {}})).is_none());
+    }
+
+    #[test]
+    fn parses_codex_live_rate_limit_response() {
+        let value = serde_json::json!({
+            "id": 2,
+            "result": {
+                "rateLimits": {
+                    "limitId": "codex",
+                    "normalModelSlug": null,
+                    "primary": {
+                        "usedPercent": 62,
+                        "windowDurationMins": 10080,
+                        "resetsAt": 1791047782
+                    }
+                },
+                "rateLimitsByLimitId": {
+                    "codex": {
+                        "limitId": "codex",
+                        "primary": {
+                            "usedPercent": 62,
+                            "windowDurationMins": 10080,
+                            "resetsAt": 1791047782
+                        }
+                    }
+                }
+            }
+        });
+
+        let (remaining, reset, model) =
+            parse_codex_app_server_rate_limits(&value).expect("live quota should parse");
+        assert_eq!(remaining, 38.0);
+        assert_eq!(reset, Some(1791047782));
+        assert_eq!(model.as_deref(), Some("codex"));
     }
 
     #[test]
