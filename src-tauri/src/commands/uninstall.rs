@@ -143,9 +143,7 @@ fn brew_manages(formula: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 fn active_nvm_node_version() -> Option<String> {
-    if find_executable("nvm").is_none() {
-        return None;
-    }
+    find_executable("nvm")?;
     let node = PathBuf::from(find_executable("node")?);
     let nvm_symlink = PathBuf::from(env::var_os("NVM_SYMLINK")?);
     if !path_is_under(&node, &nvm_symlink) {
@@ -155,6 +153,7 @@ fn active_nvm_node_version() -> Option<String> {
         .map(|version| version.trim().trim_start_matches('v').to_string())
 }
 
+#[allow(clippy::needless_return)]
 fn uninstall_node_runtime(logger: &UninstallLogger) -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
@@ -195,6 +194,7 @@ fn uninstall_node_runtime(logger: &UninstallLogger) -> Result<bool, String> {
     }
 }
 
+#[allow(clippy::needless_return)]
 fn uninstall_git(logger: &UninstallLogger) -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
@@ -226,6 +226,7 @@ fn uninstall_git(logger: &UninstallLogger) -> Result<bool, String> {
     }
 }
 
+#[allow(clippy::needless_return)]
 fn uninstall_rust(logger: &UninstallLogger) -> Result<bool, String> {
     if find_executable("rustup").is_some() {
         logger.info("检测到 rustup，将使用官方 rustup self uninstall 移除 Rust/Cargo 工具链。".to_string());

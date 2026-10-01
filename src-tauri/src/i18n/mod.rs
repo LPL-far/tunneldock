@@ -5,6 +5,7 @@ pub enum Locale {
 }
 
 impl Locale {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Self {
         if value.starts_with("en") || value.starts_with("EN") {
             Self::EnUs

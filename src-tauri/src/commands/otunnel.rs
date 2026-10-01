@@ -185,7 +185,7 @@ pub async fn get_otunnel_status(
 
     // Find if otunnel process is running
     let mut pid = *state.otunnel_pid.lock();
-    let is_running_tracked = pid.map(|p| is_process_running(p)).unwrap_or(false);
+    let is_running_tracked = pid.map(is_process_running).unwrap_or(false);
 
     let mut running = is_running_tracked;
     if !running {

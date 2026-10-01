@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use crate::models::{EnvCheckItem, InstallProgressEvent, TunnelSettings};
 use crate::state::AppState;
+use crate::utils::chappie_broker::{version_major, versions_compatible};
 use crate::utils::cmd::{execute_cmd, find_executable, run_streaming};
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path, sync_chappie_yaml};
 
@@ -330,19 +331,44 @@ pub async fn check_environment(state: State<'_, Arc<AppState>>) -> Result<Vec<En
 
         let has_pkg_on_disk = chappie_pkg_file.exists();
         let has_pkg_in_list = list_out.stdout.contains("@zetaloop/chappie");
-        let has_broker = broker_out.success && !broker_out.stdout.trim().is_empty();
+        let broker_version = broker_out.stdout.trim().to_string();
+        let has_broker = broker_out.success && !broker_version.is_empty();
 
         if has_broker && (has_pkg_on_disk || has_pkg_in_list) {
             chappie_item.installed = true;
-            chappie_item.status = "ready".to_string();
-            let ver_text = chappie_ver
-                .map(|v| format!("v{} ", v))
-                .unwrap_or_default();
-            chappie_item.message = if is_en {
-                format!("Chappie MCP Broker {}integrated into Pi", ver_text)
+            let extension_version = chappie_ver.clone().unwrap_or_default();
+            let compatible = extension_version.is_empty()
+                || versions_compatible(&broker_version, &extension_version);
+
+            chappie_item.version = Some(if extension_version.is_empty() {
+                format!("broker {}", broker_version)
             } else {
-                format!("Chappie MCP Broker {}已正常集成至 Pi", ver_text)
-            };
+                format!("broker {} / extension {}", broker_version, extension_version)
+            });
+
+            if compatible {
+                chappie_item.status = "ready".to_string();
+                chappie_item.message = if is_en {
+                    "Chappie Broker and Pi extension are ready".to_string()
+                } else {
+                    "Chappie Broker 与 Pi 扩展已就绪".to_string()
+                };
+            } else {
+                chappie_item.status = "outdated".to_string();
+                chappie_item.required_version = version_major(&broker_version)
+                    .map(|major| format!("Pi extension major {}", major));
+                chappie_item.message = if is_en {
+                    format!(
+                        "Chappie major versions do not match (broker {}, extension {}). Update the Pi extension.",
+                        broker_version, extension_version
+                    )
+                } else {
+                    format!(
+                        "Chappie 主版本不匹配（Broker {}，Pi 扩展 {}），请更新 Pi 扩展",
+                        broker_version, extension_version
+                    )
+                };
+            }
         }
     }
     items.push(chappie_item);
@@ -444,6 +470,7 @@ pub async fn check_environment(state: State<'_, Arc<AppState>>) -> Result<Vec<En
     Ok(items)
 }
 
+#[allow(clippy::needless_return)]
 #[tauri::command]
 pub async fn install_component(app: AppHandle, item_id: String) -> Result<bool, String> {
     let app_handle = app.clone();

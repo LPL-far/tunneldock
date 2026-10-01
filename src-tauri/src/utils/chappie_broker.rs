@@ -1,6 +1,26 @@
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+pub fn version_major(version: &str) -> Option<u64> {
+    version
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+pub fn versions_compatible(broker_version: &str, extension_version: &str) -> bool {
+    match (
+        version_major(broker_version),
+        version_major(extension_version),
+    ) {
+        (Some(broker_major), Some(extension_major)) => broker_major == extension_major,
+        _ => true,
+    }
+}
+
 pub fn chappie_directory() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -103,8 +123,8 @@ where
     let mut line = String::new();
 
     let bytes = tokio::time::timeout(
-    std::time::Duration::from_secs(1),
-    reader.read_line(&mut line),
+        std::time::Duration::from_secs(1),
+        reader.read_line(&mut line),
     )
     .await
     .map_err(|_| "等待 Chappie Broker 响应超时".to_string())?
@@ -189,10 +209,16 @@ pub async fn wait_for_session(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_chappie_major_version_mismatch() {
+        assert!(versions_compatible("1.0.0", "1.1.0"));
+        assert!(!versions_compatible("1.0.0", "0.5.0"));
+        assert!(!versions_compatible("2.0.0", "1.9.0"));
+    }
 
     #[test]
     fn chappie_directory_ends_with_dot_chappie() {
@@ -222,9 +248,9 @@ mod tests {
         );
     }
 
-#[test]
-fn parses_broker_sessions_response() {
-    let raw = r#"{
+    #[test]
+    fn parses_broker_sessions_response() {
+        let raw = r#"{
         "type": "response",
         "id": 1,
         "sessions": [
@@ -241,12 +267,12 @@ fn parses_broker_sessions_response() {
         ]
     }"#;
 
-    let sessions = parse_sessions_response(raw, 1)
-        .expect("valid broker sessions response should parse");
+        let sessions =
+            parse_sessions_response(raw, 1).expect("valid broker sessions response should parse");
 
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].id, "session-123");
-    assert_eq!(sessions[0].cwd, r"D:\project");
-    assert_eq!(sessions[0].binding_count, 2);
-}
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "session-123");
+        assert_eq!(sessions[0].cwd, r"D:\project");
+        assert_eq!(sessions[0].binding_count, 2);
+    }
 }

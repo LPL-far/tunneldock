@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 
 use crate::models::InstallProgressEvent;
+use crate::utils::chappie_broker::versions_compatible;
 use crate::utils::cmd::{execute_cmd, find_executable, refresh_process_path, run_streaming};
 use super::operation::component_operation_lock;
 
@@ -167,13 +168,17 @@ fn verify_chappie() -> Result<String, String> {
                         .map(str::to_string)
                 });
 
-            return Ok(match extension_version {
-                Some(version) => format!(
+            return match extension_version {
+                Some(version) if versions_compatible(broker_version, &version) => Ok(format!(
                     "Chappie Broker v{} + Pi 扩展 v{} 已验证",
                     broker_version, version
-                ),
-                None => format!("Chappie Broker v{} + Pi 扩展已验证", broker_version),
-            });
+                )),
+                Some(version) => Err(format!(
+                    "Chappie 主版本不匹配：Broker v{}，Pi 扩展 v{}。请执行 pi update --extensions",
+                    broker_version, version
+                )),
+                None => Ok(format!("Chappie Broker v{} + Pi 扩展已验证", broker_version)),
+            };
         }
     }
 
@@ -529,8 +534,12 @@ fn install_component_blocking(app: AppHandle, item_id: String) -> Result<bool, S
             let broker_ok =
                 run_logged(&logger, "npm", &["install", "-g", "@zetaloop/chappie@1"]);
 
-            let extension_ok =
-                run_logged(&logger, "pi", &["install", "npm:@zetaloop/chappie"]);
+            let list = execute_cmd("pi", &["list"], None);
+            let extension_ok = if list.success && list.stdout.contains("@zetaloop/chappie") {
+                run_logged(&logger, "pi", &["update", "--extensions"])
+            } else {
+                run_logged(&logger, "pi", &["install", "npm:@zetaloop/chappie"])
+            };
 
             broker_ok && extension_ok
         }
