@@ -1,6 +1,6 @@
 use crate::audit::{parse_rpc_audit_event, RpcAuditEvent};
 use crate::models::{McpCallRecord, WorkspaceItem};
-use crate::state::AppState;
+use crate::state::{AppState, HISTORY_RECORD_LIMIT};
 use crate::utils::chappie_broker;
 use crate::utils::cmd::{execute_cmd, is_process_running, kill_process_tree};
 use crate::utils::time::local_now_rfc3339;
@@ -59,8 +59,15 @@ fn insert_running_call(
         total_tokens: input_tokens,
     };
 
-    state.history.lock().insert(0, record);
-    state.save_history();
+    {
+        let mut history = state.history.lock();
+        history.insert(0, record);
+        if history.len() > HISTORY_RECORD_LIMIT {
+            history.truncate(HISTORY_RECORD_LIMIT);
+        }
+    }
+    // Tool starts stay in memory so the UI can show live activity. Persist once
+    // the call finishes instead of rewriting the full history file twice per call.
     record_id
 }
 
@@ -236,6 +243,7 @@ pub async fn remove_workspace(
     Ok(true)
 }
 
+#[allow(clippy::manual_flatten)]
 #[tauri::command]
 pub async fn start_workspace_session(
     app: AppHandle,
@@ -465,7 +473,9 @@ pub async fn start_workspace_session(
                                                 }
 
                                                 let mut list = probe_state.workspaces.lock();
-                                                if let Some(w) = list.iter_mut().find(|w| w.id == probe_ws_id) {
+                                                if let Some(w) =
+                                                    list.iter_mut().find(|w| w.id == probe_ws_id)
+                                                {
                                                     w.status = "ready".to_string();
                                                     w.session_id = Some(session.id.clone());
                                                     w.binding_count = session.binding_count;
@@ -503,7 +513,9 @@ pub async fn start_workspace_session(
                                                 }
 
                                                 let mut list = probe_state.workspaces.lock();
-                                                if let Some(w) = list.iter_mut().find(|w| w.id == probe_ws_id) {
+                                                if let Some(w) =
+                                                    list.iter_mut().find(|w| w.id == probe_ws_id)
+                                                {
                                                     w.status = "error".to_string();
                                                     // Keep the Pi RPC session ID so a later Broker
                                                     // reconnect can be recognized on refresh. The

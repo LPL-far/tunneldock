@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use crate::audit::{redact_audit_json, redact_audit_text};
 use crate::models::{McpCallRecord, TunnelSettings, WorkspaceItem};
 use crate::utils::cmd::kill_process_tree;
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path};
@@ -14,6 +15,7 @@ use crate::utils::time::normalize_timestamp_to_local;
 const APP_DATA_DIR_NAME: &str = "TunnelDock";
 const LEGACY_APP_DATA_DIR_NAMES: [&str; 2] = ["local-mcp-console", "chappie-desktop"];
 const PERSISTED_FILES: [&str; 3] = ["settings.json", "workspaces.json", "history.json"];
+pub(crate) const HISTORY_RECORD_LIMIT: usize = 2_000;
 
 pub struct AppState {
     pub workspaces: Arc<Mutex<Vec<WorkspaceItem>>>,
@@ -138,18 +140,63 @@ impl AppState {
         self.save_workspaces();
     }
 
-    fn load_settings(data_dir: &PathBuf) -> TunnelSettings {
+    fn tunnel_key_path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".chappie")
+            .join("tunnelkey.txt")
+    }
+
+    fn read_tunnel_key(path: &Path) -> String {
+        fs::read_to_string(path)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    fn persist_settings_file(file: &Path, settings: &TunnelSettings) {
+        let mut persisted = settings.clone();
+        // The API key has a single durable source: ~/.chappie/tunnelkey.txt.
+        // Keep it in memory for the settings form, but never duplicate it in
+        // TunnelDock's settings.json.
+        persisted.api_key.clear();
+        if let Ok(json) = serde_json::to_string_pretty(&persisted) {
+            let _ = fs::write(file, json);
+        }
+    }
+
+    fn load_settings(data_dir: &Path) -> TunnelSettings {
         let file = data_dir.join("settings.json");
+        let key_file = Self::tunnel_key_path();
+        let mut key = Self::read_tunnel_key(&key_file);
+
         if let Ok(content) = fs::read_to_string(&file) {
             if let Ok(mut settings) = serde_json::from_str::<TunnelSettings>(&content) {
+                // Migrate the pre-hardening duplicate key out of settings.json.
+                if key.is_empty() && !settings.api_key.trim().is_empty() {
+                    if let Some(parent) = key_file.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    if fs::write(&key_file, settings.api_key.trim()).is_ok() {
+                        key = settings.api_key.trim().to_string();
+                    }
+                } else if !key.is_empty() {
+                    settings.api_key = key.clone();
+                }
+
                 // 8080 was TunnelDock's legacy hard-coded default. Migrate it to
                 // automatic allocation so upgrades do not retain the collision-prone
                 // behavior. Users can still choose any explicit non-zero port later.
                 if settings.health_port == 8080 {
                     settings.health_port = 0;
-                    if let Ok(json) = serde_json::to_string_pretty(&settings) {
-                        let _ = fs::write(&file, json);
-                    }
+                }
+
+                if !key.is_empty() {
+                    settings.api_key = key;
+                }
+                settings.key_file_path = key_file.to_string_lossy().to_string();
+                if key_file.exists() || settings.api_key.is_empty() {
+                    Self::persist_settings_file(&file, &settings);
                 }
                 return settings;
             }
@@ -158,17 +205,6 @@ impl AppState {
         // Try reading existing from ~/.chappie/tunnelkey.txt or chappie.yaml if present.
         // These names belong to the Chappie/otunnel integration and are intentionally
         // retained independently from the TunnelDock product brand.
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let key_file = home.join(".chappie").join("tunnelkey.txt");
-        let key = if key_file.exists() {
-            fs::read_to_string(&key_file)
-                .unwrap_or_default()
-                .trim()
-                .to_string()
-        } else {
-            String::new()
-        };
-
         ensure_chappie_yaml_synced();
 
         // Try reading tunnel_id from chappie.yaml across all standard locations.
@@ -213,12 +249,10 @@ impl AppState {
     pub fn save_settings(&self) {
         let settings = self.settings.lock().clone();
         let file = self.app_data_dir.join("settings.json");
-        if let Ok(json) = serde_json::to_string_pretty(&settings) {
-            let _ = fs::write(file, json);
-        }
+        Self::persist_settings_file(&file, &settings);
     }
 
-    fn load_workspaces(data_dir: &PathBuf) -> Vec<WorkspaceItem> {
+    fn load_workspaces(data_dir: &Path) -> Vec<WorkspaceItem> {
         let file = data_dir.join("workspaces.json");
         if let Ok(content) = fs::read_to_string(&file) {
             if let Ok(list) = serde_json::from_str::<Vec<WorkspaceItem>>(&content) {
@@ -247,7 +281,7 @@ impl AppState {
         }
     }
 
-    fn load_history(data_dir: &PathBuf) -> Vec<McpCallRecord> {
+    fn load_history(data_dir: &Path) -> Vec<McpCallRecord> {
         let file = data_dir.join("history.json");
         if let Ok(content) = fs::read_to_string(&file) {
             if let Ok(list) = serde_json::from_str::<Vec<McpCallRecord>>(&content) {
@@ -265,19 +299,34 @@ impl AppState {
         history
             .into_iter()
             .filter(|record| record.id != "init_sample_1" && record.id != "sessions_sample_2")
+            .take(HISTORY_RECORD_LIMIT)
             .map(|mut record| {
                 record.timestamp = normalize_timestamp_to_local(&record.timestamp);
+                record.args_json = redact_audit_json(&record.args_json);
+                record.result_summary = redact_audit_text(&record.result_summary);
                 record
             })
             .collect()
     }
 
     pub fn save_history(&self) {
-        let list = self.history.lock().clone();
+        let list = {
+            let mut history = self.history.lock();
+            if history.len() > HISTORY_RECORD_LIMIT {
+                history.truncate(HISTORY_RECORD_LIMIT);
+            }
+            history.clone()
+        };
         let file = self.app_data_dir.join("history.json");
         if let Ok(json) = serde_json::to_string_pretty(&list) {
             let _ = fs::write(file, json);
         }
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -289,8 +338,8 @@ impl Drop for AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::AppState;
-    use crate::models::McpCallRecord;
+    use super::{AppState, HISTORY_RECORD_LIMIT};
+    use crate::models::{McpCallRecord, TunnelSettings};
     use crate::utils::time::normalize_timestamp_to_local;
     use std::fs;
     use std::path::PathBuf;
@@ -345,6 +394,59 @@ mod tests {
 
         assert_eq!(sanitized.len(), 1);
         assert_eq!(sanitized[0].id, "real-call");
+    }
+
+    #[test]
+    fn persisted_settings_never_duplicate_the_api_key() {
+        let data_dir = temporary_data_root("settings-redaction");
+        fs::create_dir_all(&data_dir).expect("test data directory should be created");
+        let file = data_dir.join("settings.json");
+        let settings = TunnelSettings {
+            tunnel_id: "tunnel_test".to_string(),
+            api_key: "sk-project-secret123456".to_string(),
+            key_file_path: "C:\\Users\\test\\.chappie\\tunnelkey.txt".to_string(),
+            health_port: 0,
+            profile_name: "chappie".to_string(),
+            locale: "zh-CN".to_string(),
+        };
+
+        AppState::persist_settings_file(&file, &settings);
+
+        let content = fs::read_to_string(&file).expect("persisted settings should be readable");
+        let persisted: TunnelSettings =
+            serde_json::from_str(&content).expect("persisted settings should remain valid JSON");
+        assert!(!content.contains("sk-project-secret123456"));
+        assert!(persisted.api_key.is_empty());
+        fs::remove_dir_all(data_dir).expect("test data should be removed");
+    }
+
+    #[test]
+    fn sanitize_history_redacts_secrets_and_limits_retention() {
+        let records = (0..(HISTORY_RECORD_LIMIT + 5))
+            .map(|index| McpCallRecord {
+                id: format!("call-{index}"),
+                timestamp: "2026-09-18T03:04:04+00:00".to_string(),
+                session_id: None,
+                workspace_id: None,
+                workspace_name: Some("workspace".to_string()),
+                tool_name: "write".to_string(),
+                args_json: r#"{"api_key":"sk-project-secret123456"}"#.to_string(),
+                result_summary: "Bearer abcdefghijklmnop".to_string(),
+                status: "success".to_string(),
+                duration_ms: 1,
+                input_tokens: 1,
+                output_tokens: 1,
+                total_tokens: 2,
+            })
+            .collect();
+
+        let sanitized = AppState::sanitize_history(records);
+
+        assert_eq!(sanitized.len(), HISTORY_RECORD_LIMIT);
+        assert!(!sanitized[0].args_json.contains("sk-project-secret123456"));
+        assert!(!sanitized[0].result_summary.contains("abcdefghijklmnop"));
+        assert!(sanitized[0].args_json.contains("[REDACTED]"));
+        assert!(sanitized[0].result_summary.contains("[REDACTED]"));
     }
 
     #[test]
