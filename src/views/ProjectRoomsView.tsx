@@ -69,6 +69,8 @@ const emptyTask = (): ProjectTask => ({
   summary: "",
   kind: "work",
   thread_id: "",
+  consultation_id: "",
+  web_reviewed: false,
   auto_dispatch: false,
   created_at: "",
   updated_at: "",

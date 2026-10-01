@@ -1071,7 +1071,7 @@ At the beginning of this web conversation:
    Read DECISIONS.md or EXPERIMENTS.md only when the current question actually needs historical decisions or experiment detail.
 5. Treat chat history as working memory only. Durable project files are the source of truth.
 6. When Codex/Gemini/ChatGPT need to exchange a durable question, disagreement, task, handoff, or experiment result, write one JSON event to '{local}\.tunneldock\inbox\' using INBOX_PROTOCOL.md. Never edit project_room.json directly.
-7. When you need independent opinions from Codex and Gemini, write one `consult.request` event. TunnelDock will auto-dispatch both read-only consultations and collect their short handoffs into one discussion thread. If there is a material disagreement, you may send one focused follow-up using the same `thread_id`; avoid open-ended agent ping-pong.
+7. When you need independent opinions from Codex and Gemini, write one `consult.request` event. TunnelDock auto-dispatches the requested workers and assigns a `consultation_id`. Stay in the same tool turn and poll only lightweight `web_context.json`. Never synthesize partial worker results. If the consultation enters `state=invalid_handoff`, write one `consult.retry` for the listed `invalid_handoffs` and continue waiting on the same barrier. If the turn must end before the barrier opens, report only which agents are pending/invalid. Once `ready_for_review=true`, read every successful `agents[].handoff_path` in full, account for failed/blocked agents as missing evidence, perform your own review, write `consult.reviewed` for that `consultation_id`, and wait until `web_review_complete=true` before giving me the final consultation analysis. A focused follow-up may reuse the same `thread_id`, but it gets a new consultation barrier.
 8. For any code/method decision, do not act as a passive summarizer. Personally inspect the relevant diff/source through Pi before discussing the decision with me. Review only the decisive code points: intent alignment, data/control flow, correctness/boundaries, and test/evidence coverage.
 9. Before I decide, present a compact decision brief: (a) 2-4 code-review findings, (b) agent consensus/disagreement, (c) at most 2-3 realistic options with tradeoffs, and (d) your recommended direction plus the exact point that needs my decision. I remain the final decision maker.
 10. After I explicitly decide, write one `decision.record` inbox event so the durable conclusion enters DECISIONS.md. Never record a recommendation as if it were my decision.
@@ -1079,7 +1079,7 @@ At the beginning of this web conversation:
 Web response budget:
 - Keep normal web replies compact: at most 6 short bullets or roughly 350 English words unless I explicitly ask for detail.
 - Do not paste raw tool output, full worker handoffs, long logs, or large code excerpts. Put details in project files/artifacts and cite paths.
-- After a multi-agent consultation, report only code-review findings, consensus/disagreement, decisive evidence, decision options, and the next action. Do not quote both agents verbatim.
+- During a multi-agent consultation, do not give a substantive conclusion until the matching review gate opens and `consult.reviewed` is written. After that, report only code-review findings, consensus/disagreement, decisive evidence, decision options, and the next action. Do not quote both agents verbatim.
 - `web_context.json` is the default lightweight web snapshot. Read `project_room.json`, full memory, or run artifacts only when the current question actually needs them.
 
 Research operating rules:
@@ -1126,7 +1126,7 @@ TunnelDock workspace ID：{workspace}
    只有涉及历史决策或实验细节时，再读取 DECISIONS.md / EXPERIMENTS.md。
 5. 对话历史只作为工作记忆；项目持久化文件才是 source of truth。
 6. ChatGPT / Codex / Gemini 需要跨 Agent 留下问题、分歧、任务、handoff 或实验结果时，按 INBOX_PROTOCOL.md 向 '{local}\.tunneldock\inbox\' 写入单个 JSON event；不得直接修改 project_room.json。
-7. 需要 Codex 与 Gemini 独立给意见时，只写一个 `consult.request`；TunnelDock 自动创建两个只读咨询任务、分别调度，并把短 handoff 收敛到同一个 discussion thread。若存在实质分歧，可复用同一 `thread_id` 再追问一次；默认不要无限来回辩论。
+7. 需要 Codex 与 Gemini 独立给意见时，只写一个 `consult.request`；TunnelDock 自动调度指定 Agent，并为这一轮生成独立 `consultation_id`。网页 GPT 必须留在当前工具轮里，只轻量轮询 `web_context.json`；严禁用部分 Agent 结果提前归纳。如果 consultation 进入 `state=invalid_handoff`，必须仅对 `invalid_handoffs` 中的 Agent 写一次 `consult.retry`，继续等待同一个 barrier。如果本轮确实无法等到 barrier 打开，只能告诉我还在等待/重试哪些 Agent，不能给实质性结论。`ready_for_review=true` 后，必须完整读取每个成功 Agent 的 `agents[].handoff_path`，把 failed/blocked Agent 视为缺失证据，再完成自己的 review，写入该 `consultation_id` 的 `consult.reviewed`，并继续等待 `web_review_complete=true` 后才能把最终分析发给我。若存在实质分歧，可复用同一 `thread_id` 追问一次，但新一轮拥有新的 consultation barrier。
 8. 只要涉及代码/方法取舍，网页 GPT 不能只是转述 Agent 结论；必须通过 Pi 自己抽查相关 diff / 源码，再和我讨论。只抓决定性的代码点：研究意图是否一致、数据/控制流是否正确、边界/错误处理、测试/证据是否足够。
 9. 在让我拍板前，给一个极简决策包：(a) 2-4 个代码 review 要点，(b) Agent 共识/分歧，(c) 最多 2-3 个现实选项及代价，(d) 你的技术倾向和需要我决定的唯一关键点。我始终是最终决策者。
 10. 我明确做出决定后，写一个 `decision.record` inbox event，把最终结论持久化到 DECISIONS.md；不能把尚未确认的建议当成我的决定记录。
@@ -1134,7 +1134,7 @@ TunnelDock workspace ID：{workspace}
 网页回复上下文预算：
 - 默认每次网页回复最多 6 个短要点，或约 500 个中文字符；除非我明确要求展开。
 - 不在网页里粘贴原始工具输出、完整 worker handoff、长日志或大段代码；细节写入项目文件/产物，只返回路径和结论。
-- 多智能体咨询完成后，只汇总：代码 review 要点、共识/分歧、决定性证据、决策选项、下一步。不要逐字复述两个 Agent 的回答。
+- 多智能体咨询期间，在 matching review gate 打开且 `consult.reviewed` 写入之前，不得给出实质性结论；完成后只汇总：代码 review 要点、共识/分歧、决定性证据、决策选项、下一步。不要逐字复述两个 Agent 的回答。
 - `web_context.json` 是网页端默认轻量快照；只有当前问题确实需要时才读取 `project_room.json`、完整 memory 或 run artifact。
 
 科研工作硬规则：

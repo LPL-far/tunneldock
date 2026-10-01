@@ -87,7 +87,7 @@ pub(super) fn task_prompt(
         )
     };
     let response_rule = if is_consultation {
-        "This is a consultation round. Keep the final response under 1200 characters. Give only: Facts, Interpretation/Disagreement, Recommendation, and the single most important uncertainty. Do not repeat logs or long code excerpts."
+        "This is a consultation round. Keep the final response under 1200 characters and write the final handoff in plain English UTF-8. Give only: Facts, Interpretation/Disagreement, Recommendation, and the single most important uncertainty. Do not repeat logs or long code excerpts. The web coordinator will localize the final synthesis for the user."
     } else {
         "Keep the final handoff concise. Do not paste raw logs or large code excerpts; point to files/artifacts instead."
     };

@@ -22,13 +22,14 @@ This project is optimized for top-conference research, not product feature accum
 ## Web coordinator context budget
 - ChatGPT Web is the coordination surface, not the raw execution log. Keep normal replies compact: default to at most 6 short bullets or roughly 500 Chinese characters / 350 English words unless the user explicitly asks for a deep dive.
 - Never paste full tool output, full worker handoffs, long code excerpts, or complete experiment logs into the web conversation. Put detail in project files/artifacts and cite paths.
-- For multi-agent consultation, ChatGPT should report only: consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
+- For multi-agent consultation, ChatGPT must wait for the consultation barrier. Never synthesize while `ready_for_review=false`. Once ready, read every successful worker handoff in full, then report only consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
+- After reading all settled worker evidence and completing its own review, ChatGPT must emit `consult.reviewed` before giving the human the final consultation analysis. If a worker failed/blocked, report it as missing evidence rather than inventing consensus.
 - Prefer one focused consultation round over open-ended agent-to-agent chatting. Start another round only when a concrete unresolved question remains.
 
 ## Review and decision rules
 - Gemini modifications to core model/training/data code require Codex review before acceptance.
 - Important Codex algorithm changes require ChatGPT review for research intent and methodological consistency.
-- ChatGPT Web must personally inspect the decisive diff/source before a human-facing code or method decision. Worker conclusions are inputs, not the final review.
+- ChatGPT Web must personally inspect the decisive diff/source before a human-facing code or method decision. Worker conclusions are inputs, not the final review. A consultation is not web-reviewed until all requested workers are terminal, all successful handoffs were read in full, and `consult.reviewed` was accepted.
 - Keep the human-facing review compact: 2-4 decisive code findings, agent consensus/disagreement, at most 2-3 options with tradeoffs, and the exact question requiring the researcher's decision.
 - Agents may discuss and challenge each other. Disagreement should be preserved in Project Room discussion until a decision is made.
 - The human researcher remains the final decision maker. Only after the human explicitly decides should ChatGPT persist a `decision.record` to DECISIONS.md.
@@ -68,6 +69,28 @@ Use this when ChatGPT wants Codex and/or Gemini to independently inspect the sam
   "thread_id": "optional-existing-CONSULT-id-for-one-focused-follow-up"
 }
 ```
+
+## consult.retry
+Use this only when the matching consultation barrier reports `state=invalid_handoff` (or a terminal worker handoff is missing/unreadable). Retry only the affected agents; the same `consultation_id` remains the review barrier.
+```json
+{
+  "kind": "consult.retry",
+  "author": "chatgpt",
+  "consultation_id": "CONSULTATION-...",
+  "agents": ["codex"]
+}
+```
+
+## consult.reviewed
+Write this only after `web_context.json` shows the consultation `ready_for_review=true`, ChatGPT has read every successful `agents[].handoff_path` in full, accounted for any failed/blocked agent, and completed its own code/method review.
+```json
+{
+  "kind": "consult.reviewed",
+  "author": "chatgpt",
+  "consultation_id": "CONSULTATION-..."
+}
+```
+TunnelDock rejects this event while any requested worker is still non-terminal or a successful worker handoff is missing/not transport-safe. After writing it, wait until `web_context.json` shows `web_review_complete=true` before answering the human.
 
 ## decision.record
 Use this only after the human researcher has made the final decision. Record the durable conclusion, not the whole discussion.
@@ -125,8 +148,9 @@ Use this only after the human researcher has made the final decision. Record the
 Rules:
 - Do not edit `project_room.json` directly; it is generated state.
 - Do not use this inbox as a raw chat dump. Post only decisions, disagreements, review requests, handoffs, and reproducible evidence that another agent needs.
-- `consult.request` is read-only by default. Keep each worker's final answer under 1200 characters; ChatGPT should synthesize rather than quote both answers back verbatim.
-- If the two agents materially disagree, ChatGPT may issue one focused follow-up `consult.request` with the same `thread_id`. Avoid recursive debate unless the user explicitly asks for it.
+- `consult.request` is read-only by default. Keep each worker's final answer under 1200 characters. TunnelDock assigns one `consultation_id` to the whole round and exposes a barrier in `web_context.json`.
+- ChatGPT must not synthesize or recommend from partial results. Poll only the lightweight `web_context.json`. If `state=invalid_handoff`, send one `consult.retry` for the listed `invalid_handoffs` and keep waiting. If the web turn must end before the gate opens, report only pending/invalid agents. Once `ready_for_review=true`, read every successful full handoff path before analysis, write `consult.reviewed`, then verify `web_review_complete=true` before the final human-facing analysis.
+- If the two agents materially disagree, ChatGPT may issue one focused follow-up `consult.request` with the same `thread_id`. The follow-up gets a new `consultation_id`, so it has its own barrier. Avoid recursive debate unless the user explicitly asks for it.
 - Before asking the human to decide a code/method question, ChatGPT must personally inspect the relevant diff or source files and surface only the decisive code-review points; worker handoffs are evidence, not a substitute for review.
 - `decision.record` is written only after the human researcher explicitly decides. Keep it concise and durable; never record an unresolved recommendation as a decision.
 - Canonical research memory remains under `.project_memory/`; update it directly after meaningful decisions/results.
@@ -140,6 +164,169 @@ fn clip_text(value: &str, limit: usize) -> String {
         clipped.push_str("…");
     }
     clipped
+}
+
+fn consultation_group_id(task: &ProjectTask) -> String {
+    if !task.consultation_id.trim().is_empty() {
+        return task.consultation_id.clone();
+    }
+    format!("legacy:{}:{}", task.thread_id, task.created_at)
+}
+
+fn consultation_barriers(tasks: &[ProjectTask], runs: &[AgentRun]) -> Vec<serde_json::Value> {
+    let mut seen = std::collections::HashSet::new();
+    let mut barriers = Vec::new();
+
+    for task in tasks.iter().filter(|task| task.kind == "consultation") {
+        let consultation_id = consultation_group_id(task);
+        if !seen.insert(consultation_id.clone()) {
+            continue;
+        }
+
+        let members = tasks
+            .iter()
+            .filter(|candidate| {
+                candidate.kind == "consultation"
+                    && consultation_group_id(candidate) == consultation_id
+            })
+            .collect::<Vec<_>>();
+        let all_settled = members.iter().all(|member| {
+            matches!(
+                member.status.as_str(),
+                "review" | "completed" | "blocked" | "failed" | "cancelled"
+            )
+        });
+        let has_failures = members
+            .iter()
+            .any(|member| matches!(member.status.as_str(), "blocked" | "failed" | "cancelled"));
+
+        let agents = members
+            .iter()
+            .map(|member| {
+                let run = runs.iter().find(|run| run.task_id == member.id);
+                let handoff_path = run.map(|run| run.output_path.clone());
+                let handoff_text = handoff_path
+                    .as_deref()
+                    .and_then(|path| fs::read_to_string(path).ok());
+                let handoff_ready = handoff_text
+                    .as_deref()
+                    .map(str::trim)
+                    .map(|text| !text.is_empty())
+                    .unwrap_or(false);
+                let replacement_chars = handoff_text
+                    .as_deref()
+                    .map(|text| text.chars().filter(|ch| *ch == '\u{FFFD}').count())
+                    .unwrap_or_default();
+                let (character_count, non_ascii_chars) = handoff_text
+                    .as_deref()
+                    .map(|text| {
+                        (
+                            text.chars().count(),
+                            text.chars().filter(|ch| !ch.is_ascii()).count(),
+                        )
+                    })
+                    .unwrap_or_default();
+                let non_ascii_limit = std::cmp::max(8, character_count / 10);
+                let handoff_transport_safe =
+                    handoff_ready && replacement_chars < 3 && non_ascii_chars <= non_ascii_limit;
+                let success = matches!(member.status.as_str(), "review" | "completed");
+                serde_json::json!({
+                    "agent_id": member.owner,
+                    "task_id": member.id,
+                    "status": member.status,
+                    "success": success,
+                    "handoff_ready": handoff_ready,
+                    "handoff_readable": handoff_transport_safe,
+                    "handoff_transport_safe": handoff_transport_safe,
+                    "replacement_chars": replacement_chars,
+                    "non_ascii_chars": non_ascii_chars,
+                    "handoff_path": handoff_path,
+                    "error": run.and_then(|run| run.error_message.as_deref()).map(|value| clip_text(value, 800)),
+                    "summary_preview": clip_text(&member.summary, 400),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let invalid_handoffs = agents
+            .iter()
+            .filter(|agent| {
+                agent
+                    .get("success")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                    && agent
+                        .get("handoff_ready")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                    && !agent
+                        .get("handoff_readable")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+            })
+            .filter_map(|agent| agent.get("agent_id").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>();
+        let successful_handoffs_ready = agents.iter().all(|agent| {
+            !agent
+                .get("success")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                || agent
+                    .get("handoff_readable")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+        });
+        let ready_for_review = all_settled && successful_handoffs_ready;
+        let web_review_complete =
+            ready_for_review && members.iter().all(|member| member.web_reviewed);
+        let waiting_for = agents
+            .iter()
+            .filter(|agent| {
+                !matches!(
+                    agent
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                    "review" | "completed" | "blocked" | "failed" | "cancelled"
+                ) || (agent
+                    .get("success")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                    && !agent
+                        .get("handoff_readable")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false))
+            })
+            .filter_map(|agent| agent.get("agent_id").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>();
+
+        barriers.push(serde_json::json!({
+            "consultation_id": consultation_id,
+            "thread_id": task.thread_id,
+            "title": task.title.split(" · ").next().unwrap_or(&task.title),
+            "created_at": task.created_at,
+            "ready_for_review": ready_for_review,
+            "web_review_complete": web_review_complete,
+            "all_settled": all_settled,
+            "has_failures": has_failures,
+            "state": if !invalid_handoffs.is_empty() {
+                "invalid_handoff"
+            } else if !ready_for_review {
+                "waiting_workers"
+            } else if web_review_complete {
+                "reviewed"
+            } else if has_failures {
+                "awaiting_web_review_with_failures"
+            } else {
+                "awaiting_web_review"
+            },
+            "waiting_for": waiting_for,
+            "invalid_handoffs": invalid_handoffs,
+            "agents": agents,
+            "review_rule": "Do not synthesize this consultation until ready_for_review=true. Then read every successful agent handoff_path in full before analysis; include failed/blocked agents as missing evidence, never as consensus. After your own review is complete, write consult.reviewed for this consultation_id and wait until web_review_complete=true before giving the human the final consultation analysis.",
+        }));
+    }
+
+    barriers
 }
 
 pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), String> {
@@ -169,6 +356,8 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
                 "summary": clip_text(&task.summary, 2_400),
                 "kind": task.kind,
                 "thread_id": task.thread_id,
+                "consultation_id": task.consultation_id,
+                "web_reviewed": task.web_reviewed,
                 "auto_dispatch": task.auto_dispatch,
                 "created_at": task.created_at,
                 "updated_at": task.updated_at,
@@ -230,6 +419,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             })
         })
         .collect::<Vec<_>>();
+    let consultations = consultation_barriers(&snapshot.tasks, &snapshot.runs);
     let bridge = serde_json::json!({
         "config": &snapshot.config,
         "memory": {
@@ -254,6 +444,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "experiments": experiments,
         "discussion": discussion,
         "runs": runs,
+        "consultations": &consultations,
     });
     write_json(&bridge_dir.join(BRIDGE_FILE), &bridge)?;
 
@@ -264,6 +455,31 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
     let web_experiments = experiments.iter().take(8).cloned().collect::<Vec<_>>();
     let web_discussion = discussion.iter().take(16).cloned().collect::<Vec<_>>();
     let web_runs = runs.iter().take(12).cloned().collect::<Vec<_>>();
+    let web_consultations = consultations.iter().take(8).cloned().collect::<Vec<_>>();
+    let pending_worker_consultations = web_consultations
+        .iter()
+        .filter(|item| {
+            item.get("state").and_then(serde_json::Value::as_str) == Some("waiting_workers")
+        })
+        .count();
+    let invalid_handoff_consultations = web_consultations
+        .iter()
+        .filter(|item| {
+            item.get("state").and_then(serde_json::Value::as_str) == Some("invalid_handoff")
+        })
+        .count();
+    let awaiting_web_reviews = web_consultations
+        .iter()
+        .filter(|item| {
+            item.get("ready_for_review")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                && !item
+                    .get("web_review_complete")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .count();
     let web_context = serde_json::json!({
         "config": &snapshot.config,
         "memory": {
@@ -280,6 +496,13 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "experiments": web_experiments,
         "discussion": web_discussion,
         "runs": web_runs,
+        "consultations": web_consultations,
+        "review_gate": {
+            "pending_worker_consultations": pending_worker_consultations,
+            "invalid_handoff_consultations": invalid_handoff_consultations,
+            "awaiting_web_reviews": awaiting_web_reviews,
+            "rule": "Never synthesize a consultation from partial worker results. If state=invalid_handoff, issue consult.retry only for invalid_handoffs and wait again. When ready_for_review=true, read every successful agents[].handoff_path in full, perform your own review, write consult.reviewed, and wait until web_review_complete=true before giving the human the final consultation analysis. Failed/blocked agents are missing evidence, never consensus."
+        },
         "detail_sources": {
             "full_snapshot": bridge_dir.join(BRIDGE_FILE),
             "inbox_protocol": bridge_dir.join(INBOX_PROTOCOL_FILE),
@@ -287,8 +510,8 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         },
         "web_budget": {
             "normal_reply": "<= 6 short bullets or about 500 Chinese characters / 350 English words",
-            "consultation_reply": "consensus + disagreement + decisive evidence + next action only",
-            "note": "Read detail sources only on demand; never paste full logs or worker handoffs into the web conversation."
+            "consultation_reply": "after review gate opens: code-review findings + consensus/disagreement + decisive evidence + options + next action only",
+            "note": "Wait for the consultation review gate, read all full handoffs, then synthesize. Never paste full logs or worker handoffs into the web conversation."
         }
     });
     write_json(&bridge_dir.join(WEB_CONTEXT_FILE), &web_context)?;
@@ -441,6 +664,177 @@ pub(super) fn process_project_event_unlocked(
             }
             write_json(&discussion_path, &messages)?;
         }
+        "consult.retry" => {
+            let consultation_id = event_string(value, "consultation_id");
+            if consultation_id.is_empty() {
+                return Err("consult.retry 缺少 consultation_id".to_string());
+            }
+            let mut agents = event_string_array(value, "agents");
+            agents.retain(|agent| matches!(agent.as_str(), "codex" | "gemini"));
+            agents.sort();
+            agents.dedup();
+            if agents.is_empty() {
+                return Err("consult.retry 至少需要一个 agents: codex/gemini".to_string());
+            }
+
+            let tasks_path = dir.join(TASKS_FILE);
+            let mut tasks = read_json::<Vec<ProjectTask>>(&tasks_path)?;
+            let mut retried = Vec::new();
+            for task in &mut tasks {
+                if task.kind != "consultation"
+                    || consultation_group_id(task) != consultation_id
+                    || !agents.iter().any(|agent| agent == &task.owner)
+                {
+                    continue;
+                }
+                if !matches!(
+                    task.status.as_str(),
+                    "review" | "completed" | "blocked" | "failed" | "cancelled"
+                ) {
+                    return Err(format!(
+                        "consult.retry 拒绝并发重试：{} 当前仍处于 {}",
+                        task.owner, task.status
+                    ));
+                }
+                task.status = "queued".to_string();
+                task.summary.clear();
+                task.web_reviewed = false;
+                task.auto_dispatch = true;
+                task.updated_at = now.clone();
+                retried.push(task.owner.clone());
+            }
+            if retried.is_empty() {
+                return Err(format!(
+                    "consult.retry 在 {} 中没有找到指定 Agent",
+                    consultation_id
+                ));
+            }
+            write_json(&tasks_path, &tasks)?;
+
+            let discussion_path = dir.join(DISCUSSION_FILE);
+            let mut messages = read_json::<Vec<ProjectDiscussionMessage>>(&discussion_path)?;
+            let thread_id = tasks
+                .iter()
+                .find(|task| {
+                    task.kind == "consultation" && consultation_group_id(task) == consultation_id
+                })
+                .map(|task| task.thread_id.clone())
+                .unwrap_or_else(|| "consultation-retry".to_string());
+            messages.insert(
+                0,
+                ProjectDiscussionMessage {
+                    id: next_id("MSG"),
+                    thread_id,
+                    author,
+                    recipients: retried.clone(),
+                    message: format!(
+                        "Retry requested for {} in {}.",
+                        retried.join(", "),
+                        consultation_id
+                    ),
+                    created_at: now,
+                },
+            );
+            if messages.len() > 5_000 {
+                messages.truncate(5_000);
+            }
+            write_json(&discussion_path, &messages)?;
+        }
+        "consult.reviewed" => {
+            let consultation_id = event_string(value, "consultation_id");
+            if consultation_id.is_empty() {
+                return Err("consult.reviewed 缺少 consultation_id".to_string());
+            }
+
+            let tasks_path = dir.join(TASKS_FILE);
+            let mut tasks = read_json::<Vec<ProjectTask>>(&tasks_path)?;
+            let member_indexes = tasks
+                .iter()
+                .enumerate()
+                .filter(|(_, task)| {
+                    task.kind == "consultation" && consultation_group_id(task) == consultation_id
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            if member_indexes.is_empty() {
+                return Err(format!(
+                    "consult.reviewed 找不到 consultation_id: {}",
+                    consultation_id
+                ));
+            }
+
+            let runs = read_json::<Vec<AgentRun>>(&dir.join(RUNS_FILE))?;
+            for index in &member_indexes {
+                let task = &tasks[*index];
+                if !matches!(
+                    task.status.as_str(),
+                    "review" | "completed" | "blocked" | "failed" | "cancelled"
+                ) {
+                    return Err(format!(
+                        "consult.reviewed 拒绝提前确认：{} 仍处于 {}",
+                        task.owner, task.status
+                    ));
+                }
+                if matches!(task.status.as_str(), "review" | "completed") {
+                    let handoff_text = runs
+                        .iter()
+                        .find(|run| run.task_id == task.id)
+                        .and_then(|run| fs::read_to_string(&run.output_path).ok());
+                    let handoff_ready = handoff_text
+                        .as_deref()
+                        .map(str::trim)
+                        .map(|text| !text.is_empty())
+                        .unwrap_or(false);
+                    let transport_safe = handoff_text
+                        .as_deref()
+                        .map(|text| {
+                            let character_count = text.chars().count();
+                            let non_ascii_chars = text.chars().filter(|ch| !ch.is_ascii()).count();
+                            let non_ascii_limit = std::cmp::max(8, character_count / 10);
+                            text.chars().filter(|ch| *ch == '\u{FFFD}').count() < 3
+                                && non_ascii_chars <= non_ascii_limit
+                        })
+                        .unwrap_or(false);
+                    if !handoff_ready || !transport_safe {
+                        return Err(format!(
+                            "consult.reviewed 缺少 {} 的完整 transport-safe handoff",
+                            task.owner
+                        ));
+                    }
+                }
+            }
+
+            for index in member_indexes {
+                tasks[index].web_reviewed = true;
+                tasks[index].updated_at = now.clone();
+            }
+            write_json(&tasks_path, &tasks)?;
+
+            let discussion_path = dir.join(DISCUSSION_FILE);
+            let mut messages = read_json::<Vec<ProjectDiscussionMessage>>(&discussion_path)?;
+            let thread_id = tasks
+                .iter()
+                .find(|task| {
+                    task.kind == "consultation" && consultation_group_id(task) == consultation_id
+                })
+                .map(|task| task.thread_id.clone())
+                .unwrap_or_else(|| "consultation-review".to_string());
+            messages.insert(
+                0,
+                ProjectDiscussionMessage {
+                    id: next_id("MSG"),
+                    thread_id,
+                    author,
+                    recipients: vec!["all".to_string()],
+                    message: format!("Web review completed for {}.", consultation_id),
+                    created_at: now,
+                },
+            );
+            if messages.len() > 5_000 {
+                messages.truncate(5_000);
+            }
+            write_json(&discussion_path, &messages)?;
+        }
         "consult.request" => {
             let question = event_string(value, "question");
             if question.is_empty() {
@@ -473,6 +867,7 @@ pub(super) fn process_project_event_unlocked(
                     requested
                 }
             };
+            let consultation_id = next_id("CONSULTATION");
             let tasks_path = dir.join(TASKS_FILE);
             let mut tasks = read_json::<Vec<ProjectTask>>(&tasks_path)?;
             for agent in &agents {
@@ -489,6 +884,8 @@ pub(super) fn process_project_event_unlocked(
                         summary: String::new(),
                         kind: "consultation".to_string(),
                         thread_id: thread_id.clone(),
+                        consultation_id: consultation_id.clone(),
+                        web_reviewed: false,
                         auto_dispatch: true,
                         created_at: now.clone(),
                         updated_at: now.clone(),
@@ -569,6 +966,8 @@ pub(super) fn process_project_event_unlocked(
                         }
                     },
                     thread_id: event_string(value, "thread_id"),
+                    consultation_id: event_string(value, "consultation_id"),
+                    web_reviewed: false,
                     auto_dispatch,
                     created_at: now.clone(),
                     updated_at: now,
@@ -849,4 +1248,107 @@ pub(super) fn reconcile_project_operational_state_once(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::consultation_barriers;
+    use crate::models::{AgentRun, ProjectTask};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn task(id: &str, owner: &str, status: &str, web_reviewed: bool) -> ProjectTask {
+        ProjectTask {
+            id: id.to_string(),
+            title: format!("Review · {owner}"),
+            goal: "focused question".to_string(),
+            owner: owner.to_string(),
+            reviewers: vec!["chatgpt".to_string()],
+            status: status.to_string(),
+            write_scope: Vec::new(),
+            summary: String::new(),
+            kind: "consultation".to_string(),
+            thread_id: "thread-1".to_string(),
+            consultation_id: "CONSULTATION-1".to_string(),
+            web_reviewed,
+            auto_dispatch: true,
+            created_at: "2026-10-01T22:00:00+08:00".to_string(),
+            updated_at: "2026-10-01T22:00:00+08:00".to_string(),
+        }
+    }
+
+    fn run(task_id: &str, agent_id: &str, output_path: String) -> AgentRun {
+        AgentRun {
+            id: format!("RUN-{agent_id}"),
+            task_id: task_id.to_string(),
+            agent_id: agent_id.to_string(),
+            status: "completed".to_string(),
+            pid: None,
+            external_session_id: None,
+            start_step: None,
+            started_at: "2026-10-01T22:00:00+08:00".to_string(),
+            finished_at: Some("2026-10-01T22:01:00+08:00".to_string()),
+            prompt_path: String::new(),
+            output_path,
+            log_path: String::new(),
+            error_path: String::new(),
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn consultation_barrier_waits_for_all_handoffs_then_web_review() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tunneldock-consultation-{nonce}"));
+        fs::create_dir_all(&root).expect("temp dir");
+        let codex_path = root.join("codex.md");
+        let gemini_path = root.join("gemini.md");
+        fs::write(&codex_path, "codex answer").expect("codex handoff");
+
+        let mut tasks = vec![
+            task("TASK-CODEX", "codex", "review", false),
+            task("TASK-GEMINI", "gemini", "active", false),
+        ];
+        let runs = vec![
+            run(
+                "TASK-CODEX",
+                "codex",
+                codex_path.to_string_lossy().to_string(),
+            ),
+            run(
+                "TASK-GEMINI",
+                "gemini",
+                gemini_path.to_string_lossy().to_string(),
+            ),
+        ];
+
+        let barriers = consultation_barriers(&tasks, &runs);
+        assert_eq!(barriers[0]["state"], "waiting_workers");
+        assert_eq!(barriers[0]["ready_for_review"], false);
+
+        fs::write(&gemini_path, "gemini \u{FFFD}\u{FFFD}\u{FFFD} answer")
+            .expect("corrupt gemini handoff");
+        tasks[1].status = "review".to_string();
+        let barriers = consultation_barriers(&tasks, &runs);
+        assert_eq!(barriers[0]["state"], "invalid_handoff");
+        assert_eq!(barriers[0]["ready_for_review"], false);
+        assert_eq!(barriers[0]["invalid_handoffs"][0], "gemini");
+
+        fs::write(&gemini_path, "gemini answer").expect("gemini handoff");
+        let barriers = consultation_barriers(&tasks, &runs);
+        assert_eq!(barriers[0]["state"], "awaiting_web_review");
+        assert_eq!(barriers[0]["ready_for_review"], true);
+        assert_eq!(barriers[0]["web_review_complete"], false);
+
+        tasks[0].web_reviewed = true;
+        tasks[1].web_reviewed = true;
+        let barriers = consultation_barriers(&tasks, &runs);
+        assert_eq!(barriers[0]["state"], "reviewed");
+        assert_eq!(barriers[0]["web_review_complete"], true);
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
 }

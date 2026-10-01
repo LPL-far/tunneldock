@@ -173,6 +173,10 @@ pub struct ProjectTask {
     #[serde(default)]
     pub thread_id: String,
     #[serde(default)]
+    pub consultation_id: String,
+    #[serde(default)]
+    pub web_reviewed: bool,
+    #[serde(default)]
     pub auto_dispatch: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -384,6 +388,8 @@ mod tests {
         .expect("legacy task should load");
         assert_eq!(task.kind, "work");
         assert!(task.thread_id.is_empty());
+        assert!(task.consultation_id.is_empty());
+        assert!(!task.web_reviewed);
         assert!(!task.auto_dispatch);
 
         let config: ProjectRoomConfig = serde_json::from_str(

@@ -118,6 +118,8 @@ export interface ProjectTask {
   summary: string;
   kind: string;
   thread_id: string;
+  consultation_id: string;
+  web_reviewed: boolean;
   auto_dispatch: boolean;
   created_at: string;
   updated_at: string;
