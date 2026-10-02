@@ -743,46 +743,64 @@ async fn reconcile_project_sessions_once(
             .iter()
             .find(|session| session.cwd.replace('\\', "/").to_ascii_lowercase() == expected_cwd)
         {
-            let mut workspaces = state.workspaces.lock();
-            if let Some(workspace) = workspaces
-                .iter_mut()
-                .find(|workspace| workspace.id == workspace_id)
+            let mut should_migrate_legacy_host = false;
             {
-                let next_status = if matches!(session.status.as_str(), "executing" | "generating") {
-                    "executing"
-                } else {
-                    "ready"
-                };
-                let durable_pid = workspace
-                    .pid
-                    .filter(|pid| is_process_running(*pid))
-                    .or_else(|| state.durable_workspace_pid(&workspace_id));
-                if let Some(pid) = durable_pid {
-                    state
-                        .running_workspace_pids
-                        .lock()
-                        .insert(workspace_id.clone(), pid);
-                }
-                let changed = workspace.status != next_status
-                    || workspace.session_id.as_deref() != Some(session.id.as_str())
-                    || workspace.binding_count != session.binding_count
-                    || workspace.error_message.is_some()
-                    || durable_pid.is_some_and(|pid| workspace.pid != Some(pid));
+                let mut workspaces = state.workspaces.lock();
+                if let Some(workspace) = workspaces
+                    .iter_mut()
+                    .find(|workspace| workspace.id == workspace_id)
+                {
+                    let next_status =
+                        if matches!(session.status.as_str(), "executing" | "generating") {
+                            "executing"
+                        } else {
+                            "ready"
+                        };
+                    let durable_pid = workspace
+                        .pid
+                        .filter(|pid| is_process_running(*pid))
+                        .or_else(|| state.durable_workspace_pid(&workspace_id));
+                    if let Some(pid) = durable_pid {
+                        state
+                            .running_workspace_pids
+                            .lock()
+                            .insert(workspace_id.clone(), pid);
+                    }
+                    let changed = workspace.status != next_status
+                        || workspace.session_id.as_deref() != Some(session.id.as_str())
+                        || workspace.binding_count != session.binding_count
+                        || workspace.error_message.is_some()
+                        || durable_pid.is_some_and(|pid| workspace.pid != Some(pid));
 
-                workspace.status = next_status.to_string();
-                workspace.session_id = Some(session.id.clone());
-                workspace.binding_count = session.binding_count;
-                workspace.error_message = None;
-                if let Some(pid) = durable_pid {
-                    workspace.pid = Some(pid);
+                    workspace.status = next_status.to_string();
+                    workspace.session_id = Some(session.id.clone());
+                    workspace.binding_count = session.binding_count;
+                    workspace.error_message = None;
+                    if let Some(pid) = durable_pid {
+                        workspace.pid = Some(pid);
+                    }
+                    should_migrate_legacy_host = next_status == "ready"
+                        && crate::commands::workspace::durable_project_pi_needs_node_migration(
+                            &state,
+                            &workspace_id,
+                        );
+                    if changed {
+                        adopted_any = true;
+                        let _ = app.emit(
+                            "workspace-updated",
+                            serde_json::json!({ "workspace_id": &workspace_id }),
+                        );
+                    }
                 }
-                if changed {
-                    adopted_any = true;
-                    let _ = app.emit(
-                        "workspace-updated",
-                        serde_json::json!({ "workspace_id": &workspace_id }),
-                    );
-                }
+            }
+
+            if should_migrate_legacy_host {
+                let _ = crate::commands::workspace::restart_workspace_session_inner(
+                    app.clone(),
+                    state.clone(),
+                    workspace_id.clone(),
+                )
+                .await;
             }
             continue;
         }

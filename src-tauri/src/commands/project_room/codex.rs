@@ -1,5 +1,5 @@
 use super::*;
-use crate::utils::cmd::{execute_powershell, kill_process_tree};
+use crate::utils::cmd::{execute_powershell, find_executable, kill_process_tree};
 use rand::RngCore;
 use std::fmt::Write as _;
 #[cfg(not(target_os = "windows"))]
@@ -233,19 +233,51 @@ fn spawn_windows_durable_app_server(
     let run_dir = log_path
         .parent()
         .ok_or_else(|| format!("Codex run log 缺少父目录: {}", log_path.display()))?;
-    let launcher_path = run_dir.join("codex_worker.cmd");
-    let launcher = format!(
-        "@echo off\r\n\"{}\" app-server --listen \"{}\" --ws-auth capability-token --ws-token-file \"{}\" 1>>\"{}\" 2>>\"{}\"\r\nexit /b %ERRORLEVEL%\r\n",
-        executable.display(),
-        endpoint,
-        token_path.display(),
-        log_path.display(),
-        error_path.display(),
-    );
-    fs::write(&launcher_path, launcher)
-        .map_err(|error| format!("写入 {} 失败: {error}", launcher_path.display()))?;
 
-    let command_line = format!("cmd.exe /d /s /c \"\"{}\"\"", launcher_path.display());
+    let node = find_executable("node");
+    let (command_line, launcher_path) = if let Some(node) = node {
+        let launcher_path = run_dir.join("codex_worker.js");
+        let js_string =
+            |value: &str| serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
+        let args = vec![
+            "app-server".to_string(),
+            "--listen".to_string(),
+            endpoint.to_string(),
+            "--ws-auth".to_string(),
+            "capability-token".to_string(),
+            "--ws-token-file".to_string(),
+            token_path.to_string_lossy().to_string(),
+        ];
+        let launcher = format!(
+            "const fs=require(\"fs\");\nconst {{spawn}}=require(\"child_process\");\nconst errPath={};\nconst out=fs.openSync({},\"a\");\nconst err=fs.openSync(errPath,\"a\");\nfunction hostError(error){{try{{fs.appendFileSync(errPath,`[codex-host] ${{error?.stack||error}}\\n`);}}catch{{}}}}\nprocess.on(\"uncaughtException\",error=>{{hostError(error);process.exit(1);}});\nconst child=spawn({}, {}, {{stdio:[\"ignore\",out,err],windowsHide:true}});\nchild.on(\"error\",error=>{{hostError(error);process.exit(1);}});\nchild.on(\"exit\",code=>process.exit(code??0));\n",
+            js_string(&error_path.to_string_lossy()),
+            js_string(&log_path.to_string_lossy()),
+            js_string(&executable.to_string_lossy()),
+            serde_json::to_string(&args).unwrap_or_else(|_| "[]".to_string()),
+        );
+        fs::write(&launcher_path, launcher)
+            .map_err(|error| format!("写入 {} 失败: {error}", launcher_path.display()))?;
+        (
+            format!("\"{}\" \"{}\"", node, launcher_path.display()),
+            launcher_path,
+        )
+    } else {
+        let launcher_path = run_dir.join("codex_worker.cmd");
+        let launcher = format!(
+            "@echo off\r\n\"{}\" app-server --listen \"{}\" --ws-auth capability-token --ws-token-file \"{}\" 1>>\"{}\" 2>>\"{}\"\r\nexit /b %ERRORLEVEL%\r\n",
+            executable.display(),
+            endpoint,
+            token_path.display(),
+            log_path.display(),
+            error_path.display(),
+        );
+        fs::write(&launcher_path, launcher)
+            .map_err(|error| format!("写入 {} 失败: {error}", launcher_path.display()))?;
+        (
+            format!("cmd.exe /d /s /c \"\"{}\"\"", launcher_path.display()),
+            launcher_path,
+        )
+    };
     let script = format!(
         "$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='{}'}}; if($r.ReturnValue -ne 0){{Write-Error ('Win32_Process.Create failed: '+$r.ReturnValue); exit 1}}; [Console]::Out.Write($r.ProcessId)",
         powershell_single_quote(&command_line)
@@ -306,6 +338,7 @@ fn spawn_direct_app_server(
 pub(super) fn cleanup_worker_artifacts(prompt_path: &str) {
     if let Some(parent) = Path::new(prompt_path).parent() {
         let _ = fs::remove_file(parent.join("codex_worker.cmd"));
+        let _ = fs::remove_file(parent.join("codex_worker.js"));
     }
 }
 

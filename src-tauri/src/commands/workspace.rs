@@ -41,6 +41,12 @@ fn spawn_durable_project_pi(
 ) -> Result<u32, String> {
     let pi = find_executable("pi")
         .ok_or_else(|| "未找到 pi 可执行文件，无法启动 durable Project Room session".to_string())?;
+    let resume_session_id = state
+        .workspaces
+        .lock()
+        .iter()
+        .find(|workspace| workspace.id == workspace_id)
+        .and_then(|workspace| workspace.session_id.clone());
     let runtime_dir = durable_pi_runtime_dir(state, workspace_id);
     fs::create_dir_all(&runtime_dir)
         .map_err(|error| format!("创建 {} 失败: {error}", runtime_dir.display()))?;
@@ -65,12 +71,27 @@ fn spawn_durable_project_pi(
         let launcher_path = runtime_dir.join("pi_worker.js");
         let js_string =
             |value: &str| serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
+        let mut pi_args = vec![
+            pi_cli.to_string_lossy().to_string(),
+            "--mode".to_string(),
+            "rpc".to_string(),
+            "--provider".to_string(),
+            "chappie".to_string(),
+            "--model".to_string(),
+            "chatgpt".to_string(),
+        ];
+        if let Some(session_id) = resume_session_id.as_deref() {
+            if !session_id.trim().is_empty() {
+                pi_args.push("--session-id".to_string());
+                pi_args.push(session_id.to_string());
+            }
+        }
         let launcher = format!(
-            "const fs=require(\"fs\");\nconst {{spawn}}=require(\"child_process\");\nconst errPath={};\nconst out=fs.openSync({},\"a\");\nconst err=fs.openSync(errPath,\"a\");\nfunction hostError(error){{try{{fs.appendFileSync(errPath,`[pi-host] ${{error?.stack||error}}\\n`);}}catch{{}}}}\nprocess.on(\"uncaughtException\",error=>{{hostError(error);process.exit(1);}});\nconst child=spawn({},[{},\"--mode\",\"rpc\",\"--provider\",\"chappie\",\"--model\",\"chatgpt\"],{{cwd:{},stdio:[\"pipe\",out,err],windowsHide:true}});\nchild.on(\"error\",error=>{{hostError(error);process.exit(1);}});\nchild.stdin.write(JSON.stringify({{id:\"init\",type:\"get_state\"}})+String.fromCharCode(10));\nchild.on(\"exit\",code=>process.exit(code??0));\nsetInterval(()=>{{}},3600000);\n",
+            "const fs=require(\"fs\");\nconst {{spawn}}=require(\"child_process\");\nconst errPath={};\nconst out=fs.openSync({},\"a\");\nconst err=fs.openSync(errPath,\"a\");\nfunction hostError(error){{try{{fs.appendFileSync(errPath,`[pi-host] ${{error?.stack||error}}\\n`);}}catch{{}}}}\nprocess.on(\"uncaughtException\",error=>{{hostError(error);process.exit(1);}});\nconst child=spawn({}, {}, {{cwd:{},stdio:[\"pipe\",out,err],windowsHide:true}});\nchild.on(\"error\",error=>{{hostError(error);process.exit(1);}});\nchild.stdin.write(JSON.stringify({{id:\"init\",type:\"get_state\"}})+String.fromCharCode(10));\nchild.on(\"exit\",code=>process.exit(code??0));\nsetInterval(()=>{{}},3600000);\n",
             js_string(&stderr_path.to_string_lossy()),
             js_string(&stdout_path.to_string_lossy()),
             js_string(&node),
-            js_string(&pi_cli.to_string_lossy()),
+            serde_json::to_string(&pi_args).unwrap_or_else(|_| "[]".to_string()),
             js_string(&workspace_dir.to_string_lossy()),
         );
         fs::write(&launcher_path, launcher)
@@ -83,10 +104,16 @@ fn spawn_durable_project_pi(
         // Compatibility fallback for non-standard Pi installations. Normal npm
         // installs use the Node host above and therefore create no cmd.exe wrappers.
         let launcher_path = runtime_dir.join("pi_worker.cmd");
+        let session_arg = resume_session_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!(" --session-id \"{}\"", value))
+            .unwrap_or_default();
         let launcher = format!(
-            "@echo off\r\ncd /d \"{}\"\r\n(echo {{\"id\":\"init\",\"type\":\"get_state\"}} & ping.exe -t 127.0.0.1 >nul) | call \"{}\" --mode rpc --provider chappie --model chatgpt 1>>\"{}\" 2>>\"{}\"\r\nexit /b %ERRORLEVEL%\r\n",
+            "@echo off\r\ncd /d \"{}\"\r\n(echo {{\"id\":\"init\",\"type\":\"get_state\"}} & ping.exe -t 127.0.0.1 >nul) | call \"{}\" --mode rpc --provider chappie --model chatgpt{} 1>>\"{}\" 2>>\"{}\"\r\nexit /b %ERRORLEVEL%\r\n",
             workspace_dir.display(),
             pi,
+            session_arg,
             stdout_path.display(),
             stderr_path.display(),
         );
@@ -120,6 +147,42 @@ fn spawn_durable_project_pi(
     fs::write(runtime_dir.join("wrapper.pid"), pid.to_string())
         .map_err(|error| format!("写入 durable Project Room Pi PID 失败: {error}"))?;
     Ok(pid)
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn durable_project_pi_needs_node_migration(
+    state: &AppState,
+    workspace_id: &str,
+) -> bool {
+    let runtime_dir = durable_pi_runtime_dir(state, workspace_id);
+    if !runtime_dir.join("pi_worker.cmd").exists() || runtime_dir.join("pi_worker.js").exists() {
+        return false;
+    }
+    let Some(pi) = find_executable("pi") else {
+        return false;
+    };
+    let cli_exists = Path::new(&pi)
+        .parent()
+        .map(|parent| {
+            parent
+                .join("node_modules")
+                .join("@earendil-works")
+                .join("pi-coding-agent")
+                .join("dist")
+                .join("bundle")
+                .join("cli.js")
+                .exists()
+        })
+        .unwrap_or(false);
+    find_executable("node").is_some() && cli_exists
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(super) fn durable_project_pi_needs_node_migration(
+    _state: &AppState,
+    _workspace_id: &str,
+) -> bool {
+    false
 }
 
 #[cfg(target_os = "windows")]
@@ -906,16 +969,45 @@ pub async fn stop_workspace_session_inner(
     Ok(stopped)
 }
 
+pub async fn restart_workspace_session_inner(
+    app: AppHandle,
+    state: Arc<AppState>,
+    workspace_id: String,
+) -> Result<u32, String> {
+    let preserve_session_id = if state.workspace_is_durable_project(&workspace_id) {
+        state
+            .workspaces
+            .lock()
+            .iter()
+            .find(|workspace| workspace.id == workspace_id)
+            .and_then(|workspace| workspace.session_id.clone())
+    } else {
+        None
+    };
+
+    let _ = stop_workspace_session_inner(app.clone(), state.clone(), workspace_id.clone()).await;
+    if let Some(session_id) = preserve_session_id {
+        if let Some(workspace) = state
+            .workspaces
+            .lock()
+            .iter_mut()
+            .find(|workspace| workspace.id == workspace_id)
+        {
+            workspace.session_id = Some(session_id);
+        }
+        state.save_workspaces();
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    start_workspace_session_inner(app, state, workspace_id).await
+}
+
 #[tauri::command]
 pub async fn restart_workspace_session(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
     workspace_id: String,
 ) -> Result<u32, String> {
-    let state = state.inner().clone();
-    let _ = stop_workspace_session_inner(app.clone(), state.clone(), workspace_id.clone()).await;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    start_workspace_session_inner(app, state, workspace_id).await
+    restart_workspace_session_inner(app, state.inner().clone(), workspace_id).await
 }
 
 #[tauri::command]
