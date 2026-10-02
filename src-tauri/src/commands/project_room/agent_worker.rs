@@ -177,6 +177,10 @@ pub(super) fn append_system_message(
     Ok(item)
 }
 
+fn should_poll_codex_run(run: &AgentRun, output_exists: bool) -> bool {
+    run.agent_id == "codex" && !output_exists
+}
+
 pub(super) fn refresh_run_states_unlocked(
     state: &AppState,
     project_id: &str,
@@ -196,7 +200,7 @@ pub(super) fn refresh_run_states_unlocked(
         }
 
         let output_path = PathBuf::from(&run.output_path);
-        if run.agent_id == "codex" && run.pid.is_none() && !output_path.exists() {
+        if should_poll_codex_run(run, output_path.exists()) {
             let Some(thread_id) = run.external_session_id.as_deref() else {
                 run.status = "failed".to_string();
                 run.finished_at = Some(local_now_rfc3339());
@@ -461,4 +465,42 @@ pub(super) fn ensure_dispatch_scope_is_safe(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_poll_codex_run;
+    use crate::models::AgentRun;
+
+    fn run(agent_id: &str, pid: Option<u32>) -> AgentRun {
+        AgentRun {
+            id: "RUN-1".to_string(),
+            task_id: "TASK-1".to_string(),
+            agent_id: agent_id.to_string(),
+            status: "running".to_string(),
+            pid,
+            external_session_id: Some("thread-1".to_string()),
+            start_step: Some(10),
+            started_at: "2026-10-02T12:00:00+08:00".to_string(),
+            finished_at: None,
+            prompt_path: "prompt.md".to_string(),
+            output_path: "HANDOFF.md".to_string(),
+            log_path: "stdout.log".to_string(),
+            error_path: "stderr.log".to_string(),
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn background_codex_run_with_pid_is_still_polled() {
+        let background = run("codex", Some(4242));
+        assert!(should_poll_codex_run(&background, false));
+        assert!(!should_poll_codex_run(&background, true));
+
+        let legacy_queue = run("codex", None);
+        assert!(should_poll_codex_run(&legacy_queue, false));
+
+        let gemini = run("gemini", Some(4242));
+        assert!(!should_poll_codex_run(&gemini, false));
+    }
 }
