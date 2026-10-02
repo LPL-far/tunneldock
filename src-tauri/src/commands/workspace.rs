@@ -44,26 +44,67 @@ fn spawn_durable_project_pi(
     let runtime_dir = durable_pi_runtime_dir(state, workspace_id);
     fs::create_dir_all(&runtime_dir)
         .map_err(|error| format!("创建 {} 失败: {error}", runtime_dir.display()))?;
-    let launcher_path = runtime_dir.join("pi_worker.cmd");
     let stdout_path = runtime_dir.join("stdout.log");
     let stderr_path = runtime_dir.join("stderr.log");
-    let launcher = format!(
-        "@echo off\r\ncd /d \"{}\"\r\n(echo {{\"id\":\"init\",\"type\":\"get_state\"}} & ping.exe -t 127.0.0.1 >nul) | call \"{}\" --mode rpc --provider chappie --model chatgpt 1>>\"{}\" 2>>\"{}\"\r\nexit /b %ERRORLEVEL%\r\n",
-        workspace_dir.display(),
-        pi,
-        stdout_path.display(),
-        stderr_path.display(),
-    );
-    fs::write(&launcher_path, launcher)
-        .map_err(|error| format!("写入 {} 失败: {error}", launcher_path.display()))?;
 
-    let command_line = format!("cmd.exe /d /s /c \"\"{}\"\"", launcher_path.display());
+    let node = find_executable("node");
+    let pi_cli = Path::new(&pi)
+        .parent()
+        .map(|parent| {
+            parent
+                .join("node_modules")
+                .join("@earendil-works")
+                .join("pi-coding-agent")
+                .join("dist")
+                .join("bundle")
+                .join("cli.js")
+        })
+        .filter(|path| path.exists());
+
+    let (command_line, launcher_path) = if let (Some(node), Some(pi_cli)) = (node, pi_cli) {
+        let launcher_path = runtime_dir.join("pi_worker.js");
+        let js_string =
+            |value: &str| serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
+        let launcher = format!(
+            "const fs=require(\"fs\");\nconst {{spawn}}=require(\"child_process\");\nconst errPath={};\nconst out=fs.openSync({},\"a\");\nconst err=fs.openSync(errPath,\"a\");\nfunction hostError(error){{try{{fs.appendFileSync(errPath,`[pi-host] ${{error?.stack||error}}\\n`);}}catch{{}}}}\nprocess.on(\"uncaughtException\",error=>{{hostError(error);process.exit(1);}});\nconst child=spawn({},[{},\"--mode\",\"rpc\",\"--provider\",\"chappie\",\"--model\",\"chatgpt\"],{{cwd:{},stdio:[\"pipe\",out,err],windowsHide:true}});\nchild.on(\"error\",error=>{{hostError(error);process.exit(1);}});\nchild.stdin.write(JSON.stringify({{id:\"init\",type:\"get_state\"}})+String.fromCharCode(10));\nchild.on(\"exit\",code=>process.exit(code??0));\nsetInterval(()=>{{}},3600000);\n",
+            js_string(&stderr_path.to_string_lossy()),
+            js_string(&stdout_path.to_string_lossy()),
+            js_string(&node),
+            js_string(&pi_cli.to_string_lossy()),
+            js_string(&workspace_dir.to_string_lossy()),
+        );
+        fs::write(&launcher_path, launcher)
+            .map_err(|error| format!("写入 {} 失败: {error}", launcher_path.display()))?;
+        (
+            format!("\"{}\" \"{}\"", node, launcher_path.display()),
+            launcher_path,
+        )
+    } else {
+        // Compatibility fallback for non-standard Pi installations. Normal npm
+        // installs use the Node host above and therefore create no cmd.exe wrappers.
+        let launcher_path = runtime_dir.join("pi_worker.cmd");
+        let launcher = format!(
+            "@echo off\r\ncd /d \"{}\"\r\n(echo {{\"id\":\"init\",\"type\":\"get_state\"}} & ping.exe -t 127.0.0.1 >nul) | call \"{}\" --mode rpc --provider chappie --model chatgpt 1>>\"{}\" 2>>\"{}\"\r\nexit /b %ERRORLEVEL%\r\n",
+            workspace_dir.display(),
+            pi,
+            stdout_path.display(),
+            stderr_path.display(),
+        );
+        fs::write(&launcher_path, launcher)
+            .map_err(|error| format!("写入 {} 失败: {error}", launcher_path.display()))?;
+        (
+            format!("cmd.exe /d /s /c \"\"{}\"\"", launcher_path.display()),
+            launcher_path,
+        )
+    };
+
     let script = format!(
         "$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='{}'}}; if($r.ReturnValue -ne 0){{Write-Error ('Win32_Process.Create failed: '+$r.ReturnValue); exit 1}}; [Console]::Out.Write($r.ProcessId)",
         powershell_single_quote(&command_line)
     );
     let output = execute_powershell(&script, None);
     if !output.success {
+        let _ = fs::remove_file(&launcher_path);
         let detail = if output.stderr.trim().is_empty() {
             output.stdout.trim().to_string()
         } else {
@@ -85,6 +126,7 @@ fn spawn_durable_project_pi(
 fn cleanup_durable_project_pi_artifacts(state: &AppState, workspace_id: &str) {
     let runtime_dir = durable_pi_runtime_dir(state, workspace_id);
     let _ = fs::remove_file(runtime_dir.join("pi_worker.cmd"));
+    let _ = fs::remove_file(runtime_dir.join("pi_worker.js"));
     let _ = fs::remove_file(runtime_dir.join("stdout.log"));
     let _ = fs::remove_file(runtime_dir.join("stderr.log"));
     let _ = fs::remove_file(runtime_dir.join("wrapper.pid"));
@@ -675,14 +717,22 @@ pub async fn start_workspace_session_inner(
                         }
                     }
 
-                    let _ = app_handle.emit(
-                        "workspace-log",
-                        serde_json::json!({
-                            "workspace_id": &ws_id,
-                            "line": trimmed,
-                            "is_error": false,
-                        }),
-                    );
+                    // Pi RPC stdout is a machine protocol. Forwarding every JSON
+                    // frame to the Tauri UI duplicates large tool payloads across
+                    // the broker, audit history, terminal drawer and React state.
+                    // Audit/session frames are already handled above; only retain
+                    // genuinely human-readable non-JSON lines in the live terminal.
+                    if serde_json::from_str::<serde_json::Value>(trimmed).is_err() {
+                        let line = trimmed.chars().take(1_200).collect::<String>();
+                        let _ = app_handle.emit(
+                            "workspace-log",
+                            serde_json::json!({
+                                "workspace_id": &ws_id,
+                                "line": line,
+                                "is_error": false,
+                            }),
+                        );
+                    }
                 }
             }
         });

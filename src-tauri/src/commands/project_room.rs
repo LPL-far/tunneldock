@@ -44,6 +44,7 @@ const TRANSPORT_HEALTH_FILE: &str = "transport_health.json";
 const BRIDGE_DIR: &str = ".tunneldock";
 const BRIDGE_FILE: &str = "project_room.json";
 const WEB_CONTEXT_FILE: &str = "web_context.json";
+const WEB_STATUS_FILE: &str = "web_status.json";
 const CONSTITUTION_FILE: &str = "CONSTITUTION.md";
 const INBOX_DIR: &str = "inbox";
 const INBOX_PROTOCOL_FILE: &str = "INBOX_PROTOCOL.md";
@@ -118,6 +119,20 @@ fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), Strin
     let json = serde_json::to_string_pretty(value)
         .map_err(|error| format!("序列化 {} 失败: {}", path.display(), error))?;
     fs::write(path, json).map_err(|error| format!("写入 {} 失败: {}", path.display(), error))
+}
+
+fn write_json_if_changed<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<bool, String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("创建 {} 失败: {}", parent.display(), error))?;
+    }
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|error| format!("序列化 {} 失败: {}", path.display(), error))?;
+    if fs::read_to_string(path).ok().as_deref() == Some(json.as_str()) {
+        return Ok(false);
+    }
+    fs::write(path, json).map_err(|error| format!("写入 {} 失败: {}", path.display(), error))?;
+    Ok(true)
 }
 
 fn default_agents() -> Vec<ProjectAgentPolicy> {
@@ -733,31 +748,41 @@ async fn reconcile_project_sessions_once(
                 .iter_mut()
                 .find(|workspace| workspace.id == workspace_id)
             {
-                workspace.status = if matches!(session.status.as_str(), "executing" | "generating")
-                {
-                    "executing".to_string()
+                let next_status = if matches!(session.status.as_str(), "executing" | "generating") {
+                    "executing"
                 } else {
-                    "ready".to_string()
+                    "ready"
                 };
-                workspace.session_id = Some(session.id.clone());
-                workspace.binding_count = session.binding_count;
-                workspace.error_message = None;
                 let durable_pid = workspace
                     .pid
                     .filter(|pid| is_process_running(*pid))
                     .or_else(|| state.durable_workspace_pid(&workspace_id));
                 if let Some(pid) = durable_pid {
-                    workspace.pid = Some(pid);
                     state
                         .running_workspace_pids
                         .lock()
                         .insert(workspace_id.clone(), pid);
                 }
-                adopted_any = true;
-                let _ = app.emit(
-                    "workspace-updated",
-                    serde_json::json!({ "workspace_id": &workspace_id }),
-                );
+                let changed = workspace.status != next_status
+                    || workspace.session_id.as_deref() != Some(session.id.as_str())
+                    || workspace.binding_count != session.binding_count
+                    || workspace.error_message.is_some()
+                    || durable_pid.is_some_and(|pid| workspace.pid != Some(pid));
+
+                workspace.status = next_status.to_string();
+                workspace.session_id = Some(session.id.clone());
+                workspace.binding_count = session.binding_count;
+                workspace.error_message = None;
+                if let Some(pid) = durable_pid {
+                    workspace.pid = Some(pid);
+                }
+                if changed {
+                    adopted_any = true;
+                    let _ = app.emit(
+                        "workspace-updated",
+                        serde_json::json!({ "workspace_id": &workspace_id }),
+                    );
+                }
             }
             continue;
         }
@@ -1151,7 +1176,7 @@ Hard isolation rule:
 At the beginning of this web conversation:
 1. Bind to the local Pi/Chappie session whose cwd is exactly '{local}'. Use sessions -> cwd -> sessionId -> init; never choose by an old remembered session ID.
 2. Read '{local}\.tunneldock\CONSTITUTION.md'.
-3. Read '{local}\.tunneldock\web_context.json' and '{local}\.tunneldock\INBOX_PROTOCOL.md'. Read full `project_room.json` only when the current question needs details omitted from the compact web context.
+3. Read '{local}\.tunneldock\web_status.json' first, then '{local}\.tunneldock\INBOX_PROTOCOL.md'. Read `web_context.json` once when you need current task/discussion detail, and reread it only when `web_status.json.state_token` changes or the review gate opens. Read full `project_room.json` only for details omitted from the compact web context.
 4. Read the default durable memory set:
    - '{local}\.project_memory\MEMORY_INDEX.md'
    - '{local}\.project_memory\PROJECT_STATE.md'
@@ -1160,16 +1185,16 @@ At the beginning of this web conversation:
    Then read only the relevant domain memory for the task: MODEL_DESIGN.md, DATA_CATALOG.md, EXPERIMENTS.md, RESULTS.md, REFERENCES.md, DOCUMENTS.md, or DECISIONS.md.
 5. Treat chat history as working memory only. Durable project files are the source of truth.
 6. When Codex/Gemini/ChatGPT need to exchange a durable question, disagreement, task, handoff, or experiment result, write one JSON event to '{local}\.tunneldock\inbox\' using INBOX_PROTOCOL.md. Never edit project_room.json directly.
-7. When you need independent opinions from Codex and Gemini, write one `consult.request` event. TunnelDock auto-dispatches the requested workers and assigns a `consultation_id`. Stay in the same tool turn and poll only lightweight `web_context.json`. Never synthesize partial worker results. If the consultation enters `state=invalid_handoff`, write one `consult.retry` for the listed `invalid_handoffs` and continue waiting on the same barrier. If the turn must end before the barrier opens, report only which agents are pending/invalid. Once `ready_for_review=true`, read every successful `agents[].handoff_path` in full, account for failed/blocked agents as missing evidence, perform your own review, and write `consult.reviewed`. Then update PROJECT_STATE.md, SESSION_HANDOFF.md, and every affected domain memory file and write `memory.commit`. After memory is accepted, clean/consolidate obsolete memory/docs/code/logs/scratch, write `cleanup.commit`, and wait until the consultation state is `finalized` before giving me the final consultation analysis. A focused follow-up may reuse the same `thread_id`, but it gets a new consultation barrier.
+7. When you need independent opinions from Codex and Gemini, write one `consult.request` event. TunnelDock auto-dispatches the requested workers and assigns a `consultation_id`. Never keep one browser response stream open indefinitely while workers run: poll only `web_status.json`, at most 5 cycles / about 20 seconds. If `state_token` is unchanged and the barrier is still closed, end this web response with a compact checkpoint naming pending/invalid agents and no substantive conclusion. On the next user turn, reread `web_status.json` and continue from the persisted barrier. Once `ready_for_review=true`, read `web_context.json` and every successful `agents[].handoff_path` in full, account for failed/blocked agents as missing evidence, perform your own review, and write `consult.reviewed`. Then update PROJECT_STATE.md, SESSION_HANDOFF.md, and every affected domain memory file and write `memory.commit`. After memory is accepted, clean/consolidate obsolete memory/docs/code/logs/scratch, write `cleanup.commit`, and wait until the consultation state is `finalized` before giving me the final consultation analysis. A focused follow-up may reuse the same `thread_id`, but it gets a new consultation barrier.
 8. For any code/method decision, do not act as a passive summarizer. Personally inspect the relevant diff/source through Pi before discussing the decision with me. Review only the decisive code points: intent alignment, data/control flow, correctness/boundaries, and test/evidence coverage.
 9. Before I decide, present a compact decision brief: (a) 2-4 code-review findings, (b) agent consensus/disagreement, (c) at most 2-3 realistic options with tradeoffs, and (d) your recommended direction plus the exact point that needs my decision. I remain the final decision maker.
 10. After I explicitly decide, write one `decision.record` inbox event so the durable conclusion enters DECISIONS.md. Never record a recommendation as if it were my decision.
 
 Web response budget:
 - Keep normal web replies compact: at most 6 short bullets or roughly 350 English words unless I explicitly ask for detail.
-- Do not paste raw tool output, full worker handoffs, long logs, or large code excerpts. Put details in project files/artifacts and cite paths.
+- Do not paste raw tool output, full worker handoffs, long logs, or large code excerpts. Keep individual Pi tool results preferably <= 8 KiB: grep/find first, then read narrow ranges. Do not batch multiple potentially-large tool outputs into one web turn; save large diagnostics to files and inspect only decisive slices.
 - During a multi-agent consultation, do not give a substantive conclusion until the matching consultation state is `finalized` (workers complete, web review complete, canonical memory committed, cleanup/integration committed). Then report only code-review findings, consensus/disagreement, decisive evidence, decision options, and the next action. Do not quote both agents verbatim.
-- `web_context.json` is the default lightweight web snapshot. Read `project_room.json`, full memory, or run artifacts only when the current question actually needs them.
+- `web_status.json` is the polling/checkpoint surface. `web_context.json` is the compact detail snapshot and should be read only after `state_token` changes or when current task/discussion detail is needed. Read `project_room.json`, full memory, or run artifacts only on demand.
 
 Research operating rules:
 - The goal is top-conference research. Keep code and algorithms simple, explicit, and correct.
@@ -1207,7 +1232,7 @@ TunnelDock workspace ID：{workspace}
 这个网页对话开始时必须：
 1. 通过 Pi/Chappie 的 sessions -> cwd -> sessionId -> init，绑定 cwd 严格等于 '{local}' 的本地 Session；不要使用记忆中的旧 sessionId 猜测绑定。
 2. 阅读 '{local}\.tunneldock\CONSTITUTION.md'。
-3. 阅读 '{local}\.tunneldock\web_context.json' 和 '{local}\.tunneldock\INBOX_PROTOCOL.md'。只有当前问题确实需要轻量上下文中省略的细节时，才读取完整 `project_room.json`。
+3. 先读取 '{local}\.tunneldock\web_status.json'，再读取 '{local}\.tunneldock\INBOX_PROTOCOL.md'。只有需要当前任务/讨论细节时才读取一次 `web_context.json`；仅当 `web_status.json.state_token` 变化或 review gate 打开时才重新读取。只有轻量上下文确实不足时才读取完整 `project_room.json`。
 4. 默认先读取持久化记忆中的：
    - '{local}\.project_memory\MEMORY_INDEX.md'
    - '{local}\.project_memory\PROJECT_STATE.md'
@@ -1216,16 +1241,16 @@ TunnelDock workspace ID：{workspace}
    然后只按当前任务读取对应领域记忆：MODEL_DESIGN.md、DATA_CATALOG.md、EXPERIMENTS.md、RESULTS.md、REFERENCES.md、DOCUMENTS.md 或 DECISIONS.md。
 5. 对话历史只作为工作记忆；项目持久化文件才是 source of truth。
 6. ChatGPT / Codex / Gemini 需要跨 Agent 留下问题、分歧、任务、handoff 或实验结果时，按 INBOX_PROTOCOL.md 向 '{local}\.tunneldock\inbox\' 写入单个 JSON event；不得直接修改 project_room.json。
-7. 需要 Codex 与 Gemini 独立给意见时，只写一个 `consult.request`；TunnelDock 自动调度指定 Agent，并为这一轮生成独立 `consultation_id`。网页 GPT 必须留在当前工具轮里，只轻量轮询 `web_context.json`；严禁用部分 Agent 结果提前归纳。如果 consultation 进入 `state=invalid_handoff`，必须仅对 `invalid_handoffs` 中的 Agent 写一次 `consult.retry`，继续等待同一个 barrier。如果本轮确实无法等到 barrier 打开，只能告诉我还在等待/重试哪些 Agent，不能给实质性结论。`ready_for_review=true` 后，必须完整读取每个成功 Agent 的 `agents[].handoff_path`，把 failed/blocked Agent 视为缺失证据，再完成自己的 review 并写入 `consult.reviewed`。随后必须更新 PROJECT_STATE.md、SESSION_HANDOFF.md 和所有受影响的领域记忆文件并写入 `memory.commit`。记忆提交后必须清理/整合过时记忆、文档、代码、日志和 scratch，写入 `cleanup.commit`，并等待 consultation 的 state=`finalized` 后才能把最终分析发给我。若存在实质分歧，可复用同一 `thread_id` 追问一次，但新一轮拥有新的 consultation barrier。
+7. 需要 Codex 与 Gemini 独立给意见时，只写一个 `consult.request`；TunnelDock 自动调度指定 Agent，并生成独立 `consultation_id`。严禁为了等待 worker 而让同一个网页回复流无限保持开启：只轮询 `web_status.json`，最多 5 次/约 20 秒。若 `state_token` 未变化且 barrier 仍未打开，本轮只返回一个极短 checkpoint，说明仍在等待/重试哪些 Agent，不给实质性结论；下一次用户消息再读取 `web_status.json`，从持久化 barrier 继续。`ready_for_review=true` 后，再读取 `web_context.json` 和每个成功 Agent 的完整 `agents[].handoff_path`，把 failed/blocked 视为缺失证据，完成自己的 review 并写入 `consult.reviewed`。随后更新 PROJECT_STATE.md、SESSION_HANDOFF.md 和所有受影响领域记忆并写 `memory.commit`；再完成 cleanup 并写 `cleanup.commit`，直到 state=`finalized` 后才把最终分析发给我。若存在实质分歧，可复用同一 `thread_id` 追问一次，但新一轮拥有新的 consultation barrier。
 8. 只要涉及代码/方法取舍，网页 GPT 不能只是转述 Agent 结论；必须通过 Pi 自己抽查相关 diff / 源码，再和我讨论。只抓决定性的代码点：研究意图是否一致、数据/控制流是否正确、边界/错误处理、测试/证据是否足够。
 9. 在让我拍板前，给一个极简决策包：(a) 2-4 个代码 review 要点，(b) Agent 共识/分歧，(c) 最多 2-3 个现实选项及代价，(d) 你的技术倾向和需要我决定的唯一关键点。我始终是最终决策者。
 10. 我明确做出决定后，写一个 `decision.record` inbox event，把最终结论持久化到 DECISIONS.md；不能把尚未确认的建议当成我的决定记录。
 
 网页回复上下文预算：
 - 默认每次网页回复最多 6 个短要点，或约 500 个中文字符；除非我明确要求展开。
-- 不在网页里粘贴原始工具输出、完整 worker handoff、长日志或大段代码；细节写入项目文件/产物，只返回路径和结论。
+- 不在网页里粘贴原始工具输出、完整 worker handoff、长日志或大段代码。单次 Pi 工具结果尽量 <= 8 KiB：先 grep/find，再按行号/offset 小段读取；不要在一个 web turn 里批量调用多个可能返回几十 KB 的 read/bash，大诊断先落盘，只读取决定性片段。
 - 多智能体咨询期间，在 matching consultation 进入 state=`finalized` 之前（Agent 完成 + 网页 review + canonical memory commit + cleanup/integration commit），不得给出实质性结论；完成后只汇总：代码 review 要点、共识/分歧、决定性证据、决策选项、下一步。不要逐字复述两个 Agent 的回答。
-- `web_context.json` 是网页端默认轻量快照；只有当前问题确实需要时才读取 `project_room.json`、完整 memory 或 run artifact。
+- `web_status.json` 是网页端轮询/checkpoint 面；`web_context.json` 是轻量详情快照，只在 `state_token` 变化或确实需要当前任务/讨论细节时读取。`project_room.json`、完整 memory、run artifact 继续按需读取。
 
 科研工作硬规则：
 - 目标是顶会论文；代码和算法表达必须简洁、逻辑清晰、可验证、正确。

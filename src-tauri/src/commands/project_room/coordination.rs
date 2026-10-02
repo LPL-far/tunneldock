@@ -22,8 +22,9 @@ This project is optimized for top-conference research, not product feature accum
 
 ## Web coordinator context budget
 - ChatGPT Web is the coordination surface, not the raw execution log. Keep normal replies compact: default to at most 6 short bullets or roughly 500 Chinese characters / 350 English words unless the user explicitly asks for a deep dive.
-- Never paste full tool output, full worker handoffs, long code excerpts, or complete experiment logs into the web conversation. Put detail in project files/artifacts and cite paths.
-- For multi-agent consultation, ChatGPT must wait for the consultation barrier. Never synthesize while `ready_for_review=false`. Once ready, read every successful worker handoff in full, then report only consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
+- Never paste full tool output, full worker handoffs, long code excerpts, or complete experiment logs into the web conversation. Put detail in project files/artifacts and cite paths. Keep individual Pi tool results preferably <= 8 KiB: grep/find first, then read narrow line/offset ranges. Do not batch multiple potentially-50KiB read/bash calls into one web turn; write large diagnostics to a file and inspect only decisive slices.
+- The consultation barrier is durable Project Room state, not a reason to keep one browser response stream open. Poll `.tunneldock/web_status.json` at most 5 times / about 20 seconds in one web turn. If its `state_token` is unchanged and the gate remains closed, end with a compact checkpoint and resume on the next user turn. Do not reread `web_context.json` or logs while the token is unchanged.
+- For multi-agent consultation, never synthesize while `ready_for_review=false`. Once ready, read `web_context.json` and every successful worker handoff in full, then report only consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
 - After reading all settled worker evidence and completing its own review, ChatGPT must emit `consult.reviewed`, update canonical project memory and emit `memory.commit`, then perform cleanup/integration and emit `cleanup.commit`. A consultation is final only when the barrier state is `finalized`. If a worker failed/blocked, report it as missing evidence rather than inventing consensus.
 - Prefer one focused consultation round over open-ended agent-to-agent chatting. Start another round only when a concrete unresolved question remains.
 
@@ -179,8 +180,8 @@ Use this only after the human researcher has made the final decision. Record the
 Rules:
 - Do not edit `project_room.json` directly; it is generated state.
 - Do not use this inbox as a raw chat dump. Post only decisions, disagreements, review requests, handoffs, and reproducible evidence that another agent needs.
-- `consult.request` is read-only by default. Keep each worker's final answer under 1200 characters. TunnelDock assigns one `consultation_id` to the whole round and exposes a barrier in `web_context.json`.
-- ChatGPT must not synthesize or recommend from partial results. Poll only the lightweight `web_context.json`. If `state=invalid_handoff`, send one `consult.retry` for the listed `invalid_handoffs` and keep waiting. Once `ready_for_review=true`, read every successful full handoff, perform your own review, write `consult.reviewed`, update canonical memory and write `memory.commit`, then clean/integrate obsolete memory/docs/code/logs/scratch and write `cleanup.commit`. Wait until state=`finalized` before the final human-facing analysis.
+- `consult.request` is read-only by default. Keep each worker's final answer under 1200 characters. TunnelDock assigns one `consultation_id` to the whole round. Poll `.tunneldock/web_status.json` for the barrier; `web_context.json` is detail-on-demand.
+- ChatGPT must not synthesize or recommend from partial results. Poll `web_status.json` for no more than 5 cycles / about 20 seconds in one browser turn. If unchanged, emit only a compact checkpoint and let the next user turn resume from `state_token`. If `state=invalid_handoff`, send one `consult.retry` for the listed `invalid_handoffs`. Once `ready_for_review=true`, read `web_context.json` and every successful full handoff, perform your own review, write `consult.reviewed`, update canonical memory and write `memory.commit`, then clean/integrate obsolete memory/docs/code/logs/scratch and write `cleanup.commit`. Wait until state=`finalized` before the final human-facing analysis.
 - If the two agents materially disagree, ChatGPT may issue one focused follow-up `consult.request` with the same `thread_id`. The follow-up gets a new `consultation_id`, so it has its own barrier. Avoid recursive debate unless the user explicitly asks for it.
 - Before asking the human to decide a code/method question, ChatGPT must personally inspect the relevant diff or source files and surface only the decisive code-review points; worker handoffs are evidence, not a substitute for review.
 - `decision.record` is written only after the human researcher explicitly decides. Keep it concise and durable; never record an unresolved recommendation as a decision.
@@ -195,6 +196,69 @@ fn clip_text(value: &str, limit: usize) -> String {
         clipped.push_str("…");
     }
     clipped
+}
+
+fn json_str<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+}
+
+fn compact_json_fields(value: &serde_json::Value, limits: &[(&str, usize)]) -> serde_json::Value {
+    let mut compact = value.clone();
+    let Some(object) = compact.as_object_mut() else {
+        return compact;
+    };
+    for (key, limit) in limits {
+        if let Some(text) = object.get(*key).and_then(serde_json::Value::as_str) {
+            object.insert(
+                (*key).to_string(),
+                serde_json::Value::String(clip_text(text, *limit)),
+            );
+        }
+    }
+    compact
+}
+
+fn select_relevant_values<F>(
+    values: &[serde_json::Value],
+    priority: F,
+    total_limit: usize,
+) -> Vec<serde_json::Value>
+where
+    F: Fn(&serde_json::Value) -> bool,
+{
+    let mut selected = Vec::with_capacity(total_limit);
+    let mut ids = std::collections::HashSet::new();
+
+    for value in values.iter().filter(|value| priority(value)) {
+        if selected.len() >= total_limit {
+            break;
+        }
+        let id = json_str(value, "id");
+        if id.is_empty() || ids.insert(id.to_string()) {
+            selected.push(value.clone());
+        }
+    }
+    for value in values {
+        if selected.len() >= total_limit {
+            break;
+        }
+        let id = json_str(value, "id");
+        if id.is_empty() || ids.insert(id.to_string()) {
+            selected.push(value.clone());
+        }
+    }
+    selected
+}
+
+fn stable_state_token(value: &serde_json::Value) -> String {
+    use std::hash::{Hash, Hasher};
+    let serialized = serde_json::to_string(value).unwrap_or_default();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    serialized.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn consultation_group_id(task: &ProjectTask) -> String {
@@ -498,16 +562,66 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "runs": runs,
         "consultations": &consultations,
     });
-    write_json(&bridge_dir.join(BRIDGE_FILE), &bridge)?;
+    let _ = write_json_if_changed(&bridge_dir.join(BRIDGE_FILE), &bridge)?;
 
     // The web coordinator gets an even smaller view so long-running rooms do not
     // bloat the ChatGPT conversation. Full operational detail remains in
     // project_room.json and per-run artifacts for on-demand reads.
-    let web_tasks = tasks.iter().take(16).cloned().collect::<Vec<_>>();
-    let web_experiments = experiments.iter().take(8).cloned().collect::<Vec<_>>();
-    let web_discussion = discussion.iter().take(16).cloned().collect::<Vec<_>>();
-    let web_runs = runs.iter().take(12).cloned().collect::<Vec<_>>();
-    let web_consultations = consultations.iter().take(8).cloned().collect::<Vec<_>>();
+    let web_tasks = select_relevant_values(
+        &tasks,
+        |task| {
+            matches!(
+                json_str(task, "status"),
+                "queued" | "active" | "running" | "interactive" | "review" | "blocked"
+            )
+        },
+        12,
+    )
+    .iter()
+    .map(|task| compact_json_fields(task, &[("goal", 420), ("summary", 700)]))
+    .collect::<Vec<_>>();
+    let web_experiments = experiments
+        .iter()
+        .take(4)
+        .map(|experiment| {
+            compact_json_fields(
+                experiment,
+                &[
+                    ("hypothesis", 360),
+                    ("command", 320),
+                    ("metrics", 500),
+                    ("result", 500),
+                    ("analysis", 700),
+                ],
+            )
+        })
+        .collect::<Vec<_>>();
+    let web_discussion = discussion
+        .iter()
+        .take(8)
+        .map(|message| compact_json_fields(message, &[("message", 600)]))
+        .collect::<Vec<_>>();
+    let web_runs = select_relevant_values(
+        &runs,
+        |run| {
+            matches!(
+                json_str(run, "status"),
+                "running" | "interactive" | "failed"
+            )
+        },
+        8,
+    )
+    .iter()
+    .map(|run| compact_json_fields(run, &[("error_message", 500)]))
+    .collect::<Vec<_>>();
+    let web_consultations = select_relevant_values(
+        &consultations,
+        |consultation| json_str(consultation, "state") != "finalized",
+        6,
+    )
+    .iter()
+    .map(|consultation| compact_json_fields(consultation, &[("review_rule", 360)]))
+    .collect::<Vec<_>>();
     let pending_worker_consultations = web_consultations
         .iter()
         .filter(|item| {
@@ -544,6 +658,90 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             item.get("state").and_then(serde_json::Value::as_str) == Some("awaiting_cleanup")
         })
         .count();
+    let review_gate = serde_json::json!({
+        "pending_worker_consultations": pending_worker_consultations,
+        "invalid_handoff_consultations": invalid_handoff_consultations,
+        "awaiting_web_reviews": awaiting_web_reviews,
+        "awaiting_memory_commits": awaiting_memory_commits,
+        "awaiting_cleanups": awaiting_cleanups,
+        "rule": "A consultation is final only when state=finalized. Wait for workers, review all handoffs, commit canonical memory, compact over-budget current memory into archive when memory.health.requires_compaction=true, then clean/consolidate obsolete documents, code, logs and scratch and write cleanup.commit. Failed/blocked agents are missing evidence, never consensus."
+    });
+
+    let status_tasks = web_tasks
+        .iter()
+        .filter(|task| {
+            matches!(
+                json_str(task, "status"),
+                "queued" | "active" | "running" | "interactive" | "review" | "blocked"
+            )
+        })
+        .take(8)
+        .map(|task| {
+            serde_json::json!({
+                "id": task.get("id"),
+                "owner": task.get("owner"),
+                "status": task.get("status"),
+                "updated_at": task.get("updated_at"),
+            })
+        })
+        .collect::<Vec<_>>();
+    let status_consultations = web_consultations
+        .iter()
+        .filter(|consultation| json_str(consultation, "state") != "finalized")
+        .take(6)
+        .map(|consultation| {
+            serde_json::json!({
+                "consultation_id": consultation.get("consultation_id"),
+                "state": consultation.get("state"),
+                "ready_for_review": consultation.get("ready_for_review"),
+                "web_review_complete": consultation.get("web_review_complete"),
+                "memory_commit_complete": consultation.get("memory_commit_complete"),
+                "cleanup_commit_complete": consultation.get("cleanup_commit_complete"),
+                "waiting_for": consultation.get("waiting_for"),
+                "invalid_handoffs": consultation.get("invalid_handoffs"),
+            })
+        })
+        .collect::<Vec<_>>();
+    let status_transports = snapshot
+        .transports
+        .iter()
+        .map(|transport| {
+            serde_json::json!({
+                "agent_id": transport.agent_id,
+                "status": transport.status,
+                "active_run_id": transport.active_run_id,
+                "last_success_at": transport.last_success_at,
+                "last_failure_at": transport.last_failure_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    let status_core = serde_json::json!({
+        "project_id": &snapshot.config.id,
+        "memory_updated_at": &snapshot.memory.updated_at,
+        "tasks": &status_tasks,
+        "consultations": &status_consultations,
+        "transports": &status_transports,
+        "review_gate": &review_gate,
+    });
+    let state_token = stable_state_token(&status_core);
+    let web_status = serde_json::json!({
+        "project_id": &snapshot.config.id,
+        "state_token": state_token,
+        "has_pending_work": !status_tasks.is_empty() || !status_consultations.is_empty(),
+        "tasks": status_tasks,
+        "consultations": status_consultations,
+        "transports": status_transports,
+        "review_gate": &review_gate,
+        "detail_source": bridge_dir.join(WEB_CONTEXT_FILE),
+        "flow_control": {
+            "poll_interval_seconds": 4,
+            "max_inline_wait_seconds": 20,
+            "max_poll_cycles": 5,
+            "unchanged_state": "If state_token is unchanged, do not reread web_context.json or full logs.",
+            "timeout_action": "End the current web stream with a compact checkpoint and no substantive conclusion. On the next user turn, reread web_status.json and continue from state_token. Logical consultation barriers remain persisted on disk."
+        }
+    });
+
     let web_context = serde_json::json!({
         "config": &snapshot.config,
         "memory": {
@@ -577,15 +775,9 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "discussion": web_discussion,
         "runs": web_runs,
         "consultations": web_consultations,
-        "review_gate": {
-            "pending_worker_consultations": pending_worker_consultations,
-            "invalid_handoff_consultations": invalid_handoff_consultations,
-            "awaiting_web_reviews": awaiting_web_reviews,
-            "awaiting_memory_commits": awaiting_memory_commits,
-            "awaiting_cleanups": awaiting_cleanups,
-            "rule": "A consultation is final only when state=finalized. Wait for workers, review all handoffs, commit canonical memory, compact over-budget current memory into archive when memory.health.requires_compaction=true, then clean/consolidate obsolete documents, code, logs and scratch and write cleanup.commit. Failed/blocked agents are missing evidence, never consensus."
-        },
+        "review_gate": &review_gate,
         "detail_sources": {
+            "status": bridge_dir.join(WEB_STATUS_FILE),
             "full_snapshot": bridge_dir.join(BRIDGE_FILE),
             "inbox_protocol": bridge_dir.join(INBOX_PROTOCOL_FILE),
             "run_root": bridge_dir.join(RUNS_DIR),
@@ -593,10 +785,13 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "web_budget": {
             "normal_reply": "<= 6 short bullets or about 500 Chinese characters / 350 English words",
             "consultation_reply": "after review gate opens: code-review findings + consensus/disagreement + decisive evidence + options + next action only",
-            "note": "Wait for the consultation review gate, read all full handoffs, then synthesize. Never paste full logs or worker handoffs into the web conversation."
+            "max_inline_wait_seconds": 20,
+            "tool_output_rule": "Never paste raw logs or large tool output into the web stream. Save/read artifacts by path and quote only decisive lines.",
+            "note": "Logical waiting lives in persisted Project Room state, not in one long browser response stream. Poll web_status.json; read web_context/full handoffs only after state_token changes or the review gate opens."
         }
     });
-    write_json(&bridge_dir.join(WEB_CONTEXT_FILE), &web_context)?;
+    let _ = write_json_if_changed(&bridge_dir.join(WEB_STATUS_FILE), &web_status)?;
+    let _ = write_json_if_changed(&bridge_dir.join(WEB_CONTEXT_FILE), &web_context)?;
 
     fs::write(bridge_dir.join(CONSTITUTION_FILE), project_constitution())
         .map_err(|error| format!("写入 Project Constitution 失败: {}", error))?;

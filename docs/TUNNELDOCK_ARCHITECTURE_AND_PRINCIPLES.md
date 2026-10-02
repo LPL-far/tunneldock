@@ -194,14 +194,24 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
 4. 会话就绪后由 Chappie Broker 提供专属 Session ID。
 
 Project Room 中 `enabled=true && keep_session_alive=true` 的工作区采用不同生命周期：
-- Windows 下生成 `runtime/project-pi/<workspace_id>/pi_worker.cmd`，由 WMI/CIM `Win32_Process.Create` 启动独立 wrapper；
-- wrapper 先向 Pi RPC stdin 写入一次 `get_state`，随后用无输出的长期 `ping -t` producer 保持 stdin 管道打开；
-- wrapper PID 写入 `wrapper.pid` 并同时保存在 workspace 状态中；
+- Windows 下默认生成 `runtime/project-pi/<workspace_id>/pi_worker.js`，由 WMI/CIM `Win32_Process.Create` 直接启动隐藏的 Node host；
+- Node host 直接 spawn Pi CLI 的 Node entrypoint，持有 child stdin，写入一次 `get_state` 后保持 pipe 打开，不再需要 `cmd.exe` wrapper 或 `ping -t` producer；
+- Node host PID 写入 `wrapper.pid` 并同时保存在 workspace 状态中；只有非标准 Pi 安装、无法定位 CLI JS 时才 fallback 到旧 `pi_worker.cmd` 兼容路径；
 - wrapper/Pi 进程树属于 WMI 服务而不是 TunnelDock/Tauri，因此开发热重载、窗口关闭或应用 restart 不会杀掉 Project Room Pi；
 - 新 TunnelDock 进程通过 `wrapper.pid` + Broker cwd/session 重新 adopt 原 session，保持同一 Session ID；
 - 只有显式 Stop/Restart Project Room Session 时才终止 wrapper + Pi 子树并清理 runtime 文件。
 
 因此网页 ChatGPT 绑定的是一个跨 TunnelDock 生命周期稳定存在的 Project Room Session，而不是某次 Tauri 进程实例的临时子进程。
+
+#### Project Room 网页信息流与断流恢复
+Project Room 的逻辑任务状态与浏览器单次 response stream 分离：
+- `.tunneldock/web_status.json` 是 2–3 KiB 级别的轮询/checkpoint 面，包含 `state_token`、pending task/consultation、transport 与 review gate；
+- 网页 GPT 单次回复最多短轮询约 20 秒（5 个周期）。`state_token` 未变化时不重复读取 `web_context.json`、handoff 或日志；barrier 未打开就结束本次 stream，下一条用户消息从持久状态继续；
+- `.tunneldock/web_context.json` 是 detail-on-demand 快照，只在 state token 变化、需要当前任务/讨论详情或 review gate 打开时读取；完整 `project_room.json` 与 run artifact 继续按需读取；
+- Pi RPC stdout 中的机器 JSON 帧不再逐行广播到 Tauri terminal；audit/session 状态仍被解析，只有人类可读非 JSON 行进入 live terminal；
+- `audit-updated` 在前端 350 ms 合并刷新，terminal 只保留最后 500 行，Project Room supervisor 也只在 workspace 状态真实变化时 emit `workspace-updated`。
+
+这样“等待 Agent 全部完成”仍由持久 barrier 保证，但不再要求一个浏览器 stream 长时间保持开启，从而降低 `Resume stream unavailable`、重放大 payload 与 UI 事件风暴的概率。
 
 #### 自动化绑定提示词生成（Prompt Generation）
 为了减少用户在网页端的繁琐配置，TunnelDock 支持一键生成与 ChatGPT 绑定的系统级指令提示词：

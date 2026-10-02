@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Header } from "./components/Header";
 import { TitleBar } from "./components/TitleBar";
@@ -71,6 +71,16 @@ export const App: React.FC = () => {
   const [terminalLogs, setTerminalLogs] = useState<
     Array<{ line: string; is_error: boolean }>
   >([]);
+  const auditRefreshTimerRef = useRef<number | null>(null);
+  const appendTerminalLog = useCallback(
+    (entry: { line: string; is_error: boolean }) => {
+      setTerminalLogs((prev) => {
+        const next = [...prev, entry];
+        return next.length > 500 ? next.slice(-500) : next;
+      });
+    },
+    []
+  );
 
   // Refresh functions
   const loadEnv = useCallback(async () => {
@@ -200,10 +210,10 @@ export const App: React.FC = () => {
         const stopInstall = await listen<InstallProgressEvent>(
           "install-log",
           (event) => {
-            setTerminalLogs((prev) => [
-              ...prev,
-              { line: event.payload.log_line, is_error: event.payload.is_error },
-            ]);
+            appendTerminalLog({
+              line: event.payload.log_line,
+              is_error: event.payload.is_error,
+            });
           }
         );
         if (disposed) {
@@ -217,10 +227,10 @@ export const App: React.FC = () => {
           line: string;
           is_error: boolean;
         }>("workspace-log", (event) => {
-          setTerminalLogs((prev) => [
-            ...prev,
-            { line: event.payload.line, is_error: event.payload.is_error },
-          ]);
+          appendTerminalLog({
+            line: event.payload.line,
+            is_error: event.payload.is_error,
+          });
         });
         if (disposed) {
           stopWs();
@@ -241,8 +251,11 @@ export const App: React.FC = () => {
         }
 
         const stopAudit = await listen("audit-updated", () => {
-          void loadHistoryData();
-          void loadWorkspaces();
+          if (auditRefreshTimerRef.current !== null) return;
+          auditRefreshTimerRef.current = window.setTimeout(() => {
+            auditRefreshTimerRef.current = null;
+            void loadHistoryData();
+          }, 350);
         });
         if (disposed) {
           stopAudit();
@@ -258,12 +271,16 @@ export const App: React.FC = () => {
 
     return () => {
       disposed = true;
+      if (auditRefreshTimerRef.current !== null) {
+        window.clearTimeout(auditRefreshTimerRef.current);
+        auditRefreshTimerRef.current = null;
+      }
       unlistenInstall?.();
       unlistenWs?.();
       unlistenWorkspaceUpdated?.();
       unlistenAudit?.();
     };
-  }, [loadHistoryData, loadWorkspaces]);
+  }, [appendTerminalLog, loadHistoryData, loadWorkspaces]);
 
   // Header Toggle Otunnel
   const handleToggleOtunnel = async () => {
