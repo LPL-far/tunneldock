@@ -1629,10 +1629,22 @@ fn dispatch_queued_tasks_unlocked(state: &AppState, project_id: &str) -> Result<
         .map(|task| (task.id.clone(), task.owner.clone(), task.thread_id.clone()))
         .collect::<Vec<_>>();
 
+    let mut busy_agents = snapshot
+        .runs
+        .iter()
+        .filter(|run| run.status == "running")
+        .map(|run| run.agent_id.clone())
+        .collect::<std::collections::HashSet<_>>();
     let mut dispatched = 0usize;
     for (task_id, owner, thread_id) in queued {
+        if busy_agents.contains(&owner) {
+            continue;
+        }
         match dispatch_project_task_unlocked(state, project_id, &task_id, &owner) {
-            Ok(_) => dispatched += 1,
+            Ok(_) => {
+                busy_agents.insert(owner.clone());
+                dispatched += 1;
+            }
             Err(error) => {
                 let dir = project_dir(state, project_id)?;
                 let tasks_path = dir.join(TASKS_FILE);

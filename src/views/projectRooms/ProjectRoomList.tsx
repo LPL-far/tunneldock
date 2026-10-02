@@ -15,6 +15,15 @@ const sessionDot = (status: string) => {
   return "bg-zinc-600";
 };
 
+const codexDot = (status: string) => {
+  if (status === "running") return "bg-emerald-400";
+  if (status === "idle" || status === "ready") return "bg-sky-400";
+  return "bg-zinc-600";
+};
+
+const shortThread = (value: string | null) =>
+  value ? `${value.slice(0, 8)}…${value.slice(-4)}` : "—";
+
 export const ProjectRoomList: React.FC<Props> = ({
   summaries,
   selectedId,
@@ -73,6 +82,26 @@ export const ProjectRoomList: React.FC<Props> = ({
               title={item.local_root}
             >
               {item.local_root}
+            </div>
+
+            <div className="mt-2 rounded-lg border border-zinc-800/70 bg-zinc-950/35 px-2 py-1.5">
+              <div className="flex items-center justify-between gap-2 text-[9px]">
+                <span className="flex items-center gap-1.5 text-zinc-500">
+                  <span className={`h-1.5 w-1.5 rounded-full ${codexDot(item.codex_status)}`} />
+                  Codex {item.codex_status}
+                </span>
+                {item.codex_active_run_id && (
+                  <span className="truncate font-mono text-zinc-600" title={item.codex_active_run_id}>
+                    {shortThread(item.codex_active_run_id)}
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 grid grid-cols-[44px_1fr] gap-x-1 text-[8px] font-mono text-zinc-600">
+                <span>human</span>
+                <span className="truncate" title={item.codex_thread_id ?? ""}>{shortThread(item.codex_thread_id)}</span>
+                <span>auto</span>
+                <span className="truncate" title={item.codex_automation_thread_id ?? ""}>{shortThread(item.codex_automation_thread_id)}</span>
+              </div>
             </div>
 
             <div className="mt-3 grid grid-cols-3 gap-1.5">

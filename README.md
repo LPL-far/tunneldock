@@ -42,7 +42,7 @@
 | --- | --- |
 | **环境检测与安装** | 自动探测 8 项本机依赖（Node ≥ 26 / npm / Git / Rust / cargo-binstall / otunnel / Pi / Chappie），逐项展示状态与版本，支持单项或「自动安装全部缺失组件」，安装日志实时流式输出 |
 | **工作区与 Session** | 添加本地项目工作区（自动探测 Git 分支与未提交变更），管理 Pi Session 生命周期（启动 / 停止 / 重启），一键生成 ChatGPT 项目绑定提示词 |
-| **科研 Project Rooms** | 将 Point Tracking / IQA Agent / 3D+MLLM 作为彼此隔离的科研控制面；每个项目持久绑定原有 Codex Desktop Thread 与 Antigravity Cascade，并维护独立的本地/服务器映射、任务、讨论、实验与额度遥测；模型/数据/实验/结果/引用/文档使用 canonical `.project_memory` 组织，网页 ChatGPT 必须等齐 Agent review、自己复核、更新 canonical memory，再完成过时文档/代码/日志/scratch 的清理整合并通过 `cleanup.commit` 后才能最终收敛 |
+| **科研 Project Rooms** | 将 Point Tracking / IQA Agent / 3D+MLLM 作为彼此隔离的科研控制面；每个项目绑定原有 Codex Desktop human thread 与 Antigravity Cascade。TunnelDock 首次从 human thread fork 一个持久 Codex automation thread，由独立本地 app-server 后台执行，因此多个 Project Room 可并行运行且不依赖 Desktop 当前切到哪条对话；模型/数据/实验/结果/引用/文档使用 canonical `.project_memory` 组织，网页 ChatGPT 最终负责 review、memory commit 与 cleanup commit |
 | **健康度与 Doctor 诊断** | 实时展示 otunnel 守护进程状态、健康探针与网络延迟；一键 Doctor 深度体检（配置、Tunnel ID、凭据、MCP 可达性、控制面连接等 8 项），失败项附中文修复建议 |
 | **MCP 调用审计** | 全量记录 ChatGPT 发起的工具调用（工具名 / 参数 / 结果摘要 / 耗时 / 状态），全文搜索、按类型与状态筛选、统计卡片（调用数 / 成功率 / 平均耗时）、单条详情查看与 JSON 导出 |
 | **凭据与设置** | 编辑 Tunnel ID、OpenAI Restricted API Key、健康探针端口，保存后自动同步至 `~/.chappie/` |
@@ -124,6 +124,7 @@ npm run tauri build
 更完整的实践与故障排查，参见 [docs/OpenAI Tunnel + Chappie + Pi.md](docs/OpenAI%20Tunnel%20%2B%20Chappie%20%2B%20Pi.md)。
 关于系统设计、通信协议与底层核心原理解析，参见 [docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md](docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md)。
 Project Room 的持久化科研记忆、数据/实验/结果/模型/引用组织与三 Agent review/finalization 规则，参见 [docs/PROJECT_ROOM_MEMORY_ARCHITECTURE.md](docs/PROJECT_ROOM_MEMORY_ARCHITECTURE.md)。
+Codex human thread / automation thread 的后台并行控制器设计，参见 [docs/CODEX_BACKGROUND_CONTROLLER.md](docs/CODEX_BACKGROUND_CONTROLLER.md)。
 
 ## 配置文件
 

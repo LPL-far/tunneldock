@@ -5,7 +5,7 @@ use crate::models::{
 };
 use crate::state::AppState;
 use crate::utils::chappie_broker;
-use crate::utils::cmd::{execute_cmd, find_executable, is_process_running};
+use crate::utils::cmd::{execute_cmd, find_executable, is_process_running, kill_process_tree};
 use crate::utils::time::local_now_rfc3339;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -178,9 +178,9 @@ fn default_remote(project_id: &str) -> ProjectRemote {
     match project_id {
         "point_tracking" => ProjectRemote {
             host: "guodongyan@10.12.54.65".to_string(),
-            root: "/data3/guodongyan/lpl/cowtracker_tap".to_string(),
+            root: "/data3/guodongyan/lpl/GeoSAMTracker".to_string(),
             environment: "/data3/guodongyan/lpl/envs/cowtracker/bin/python".to_string(),
-            notes: "Formal source/training workspace; local D:\\point_tracking stores references and durable project memory.".to_string(),
+            notes: "Active GeoSAMTracker source/training workspace; local D:\\point_tracking stores references and durable project memory. Legacy cowtracker_tap is reference-only.".to_string(),
         },
         "iqa_agent" => ProjectRemote {
             host: "lpl@10.12.54.150".to_string(),
@@ -223,6 +223,7 @@ fn seed_configs(state: &AppState) -> Vec<ProjectRoomConfig> {
                 repo_root: local_root.to_string(),
                 workspace_id,
                 codex_thread_id: None,
+                codex_automation_thread_id: None,
                 antigravity_cascade_id: None,
                 remote: default_remote(id),
                 enabled: true,
@@ -357,10 +358,7 @@ fn ensure_store(state: &AppState) -> Result<Vec<String>, String> {
                     config_changed = true;
                 }
             }
-            if config.remote.root.trim().is_empty()
-                || (project_id == "point_tracking"
-                    && config.remote.root == "/data3/guodongyan/lpl/GeoSAMTracker")
-            {
+            if config.remote.root.trim().is_empty() {
                 let seeded_remote = default_remote(project_id);
                 if !seeded_remote.root.is_empty() {
                     config.remote = seeded_remote;
@@ -538,7 +536,7 @@ pub(super) fn dispatch_project_task_unlocked(
 
     let (pid, external_session_id, start_step) = if agent_id == "codex" {
         let executable = find_codex_executable().ok_or_else(|| "未找到 Codex CLI".to_string())?;
-        let thread_id = snapshot
+        let source_thread_id = snapshot
             .config
             .codex_thread_id
             .as_deref()
@@ -550,11 +548,32 @@ pub(super) fn dispatch_project_task_unlocked(
                     snapshot.config.name
                 )
             })?;
-        let binding = codex::resolve_thread(thread_id)?;
-        let receipt = codex::queue_task(&executable, &binding, &prompt)?;
-        fs::write(&log_path, receipt)
-            .map_err(|error| format!("写入 {} 失败: {}", log_path.display(), error))?;
-        (None, Some(binding.thread_id), Some(binding.start_offset))
+        let automation_name = format!("[TunnelDock] {}", snapshot.config.name);
+        let dispatch = codex::start_background_turn(
+            &executable,
+            source_thread_id,
+            snapshot.config.codex_automation_thread_id.as_deref(),
+            &automation_name,
+            &prompt,
+            task.kind == "consultation",
+            &log_path,
+            &error_path,
+        )?;
+        if snapshot.config.codex_automation_thread_id.as_deref() != Some(&dispatch.thread_id) {
+            snapshot.config.codex_automation_thread_id = Some(dispatch.thread_id.clone());
+            snapshot.config.updated_at = local_now_rfc3339();
+            let dir = project_dir(state, project_id)?;
+            write_json(&dir.join(CONFIG_FILE), &snapshot.config)?;
+        }
+        state
+            .running_agent_pids
+            .lock()
+            .insert(run_id.clone(), dispatch.pid);
+        (
+            Some(dispatch.pid),
+            Some(dispatch.thread_id),
+            Some(dispatch.start_offset),
+        )
     } else {
         let binding = antigravity::resolve_cascade(
             &snapshot.config.local_root,
@@ -786,12 +805,29 @@ pub fn list_project_rooms(
                     .find(|workspace| workspace.id == workspace_id)
                     .cloned()
             });
+        let codex_active_run = snapshot
+            .runs
+            .iter()
+            .find(|run| run.agent_id == "codex" && run.status == "running");
+        let codex_status = if snapshot.config.codex_thread_id.is_none() {
+            "unbound"
+        } else if codex_active_run.is_some() {
+            "running"
+        } else if snapshot.config.codex_automation_thread_id.is_some() {
+            "idle"
+        } else {
+            "ready"
+        };
         summaries.push(ProjectRoomSummary {
             id: snapshot.config.id.clone(),
             name: snapshot.config.name.clone(),
             local_root: snapshot.config.local_root.clone(),
             repo_root: snapshot.config.repo_root.clone(),
             workspace_id: snapshot.config.workspace_id.clone(),
+            codex_thread_id: snapshot.config.codex_thread_id.clone(),
+            codex_automation_thread_id: snapshot.config.codex_automation_thread_id.clone(),
+            codex_status: codex_status.to_string(),
+            codex_active_run_id: codex_active_run.map(|run| run.id.clone()),
             session_status: workspace_runtime
                 .as_ref()
                 .map(|workspace| workspace.status.clone())
@@ -863,6 +899,14 @@ pub fn update_project_config(
     if config.repo_root.trim().is_empty() {
         config.repo_root = config.local_root.clone();
     }
+
+    let source_thread_changed = existing.codex_thread_id.as_deref().map(str::trim)
+        != config.codex_thread_id.as_deref().map(str::trim);
+    config.codex_automation_thread_id = if source_thread_changed {
+        None
+    } else {
+        existing.codex_automation_thread_id.clone()
+    };
 
     config.updated_at = local_now_rfc3339();
     write_json(&dir.join(CONFIG_FILE), &config)?;
@@ -1327,6 +1371,7 @@ mod tests {
             repo_root: root.to_string_lossy().to_string(),
             workspace_id: None,
             codex_thread_id: None,
+            codex_automation_thread_id: None,
             antigravity_cascade_id: None,
             remote: ProjectRemote::default(),
             enabled: true,

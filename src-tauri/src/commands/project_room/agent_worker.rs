@@ -92,7 +92,7 @@ pub(super) fn task_prompt(
         "Keep the final handoff concise. Before handoff, clean the scope you touched: remove superseded code/scripts, disposable scratch and redundant logs; merge stale/current documentation into one authoritative document; retain a log only when it contains unique reproducibility/debug evidence and point to that evidence instead of pasting it. Do not paste raw logs or large code excerpts; point to files/artifacts and mention what was removed/consolidated/retained."
     };
     let workspace_rule = if agent_id == "codex" {
-        "Continue using the workspace already bound to this Codex Desktop thread for code edits. The Project Room local root below is the coordination/memory root; do not migrate or duplicate the existing code workspace into it."
+        "This run executes on a TunnelDock-managed Codex automation thread forked from the project's human/canonical Codex conversation. Continue using the workspace inherited from that human thread for code edits. The Project Room local root below is the coordination/memory root; do not migrate or duplicate the existing code workspace into it."
     } else {
         "Use the Project Room local root as the local project workspace."
     };
@@ -216,7 +216,22 @@ pub(super) fn refresh_run_states_unlocked(
                 }
             };
             match codex::poll_run(thread_id, start_offset, &prompt) {
-                Ok(codex::CodexRunUpdate::Running) => continue,
+                Ok(codex::CodexRunUpdate::Running) => {
+                    if run.pid.map(is_process_running) == Some(false) {
+                        let error = "Codex background app-server exited before the turn produced a handoff.".to_string();
+                        run.status = "failed".to_string();
+                        run.finished_at = Some(local_now_rfc3339());
+                        run.error_message = Some(error.clone());
+                        state.running_agent_pids.lock().remove(&run.id);
+                        if let Some(task) = tasks.iter_mut().find(|task| task.id == run.task_id) {
+                            task.status = "blocked".to_string();
+                            task.summary = error;
+                            task.updated_at = local_now_rfc3339();
+                        }
+                        changed = true;
+                    }
+                    continue;
+                }
                 Ok(codex::CodexRunUpdate::Completed(text)) => {
                     run.error_message = None;
                     fs::write(&output_path, text).map_err(|error| {
@@ -224,6 +239,11 @@ pub(super) fn refresh_run_states_unlocked(
                     })?;
                 }
                 Ok(codex::CodexRunUpdate::Failed(error)) => {
+                    if let Some(pid) = run.pid {
+                        let _ = kill_process_tree(pid);
+                    }
+                    state.running_agent_pids.lock().remove(&run.id);
+                    run.pid = None;
                     run.status = "failed".to_string();
                     run.finished_at = Some(local_now_rfc3339());
                     run.error_message = Some(error.clone());
@@ -350,6 +370,11 @@ pub(super) fn refresh_run_states_unlocked(
 
         if completed || terminal_without_output {
             run.finished_at = Some(local_now_rfc3339());
+            if run.agent_id == "codex" {
+                if let Some(pid) = run.pid {
+                    let _ = kill_process_tree(pid);
+                }
+            }
             run.pid = None;
             state.running_agent_pids.lock().remove(&run.id);
 

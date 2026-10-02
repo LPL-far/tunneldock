@@ -75,7 +75,19 @@ export const ConfigSection: React.FC<Props> = ({
           className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs font-mono text-zinc-200"
         />
         <div className="text-[10px] text-zinc-600">
-          Project tasks resume this existing Codex conversation instead of creating a new one.
+          Human/canonical Codex conversation. TunnelDock forks it once into a background automation thread so tasks do not depend on which Desktop chat is currently open.
+        </div>
+      </label>
+
+      <label className="block space-y-1.5">
+        <span className="text-[11px] text-zinc-500">Codex Automation Thread ID</span>
+        <input
+          value={draft.codex_automation_thread_id ?? "Not created yet"}
+          readOnly
+          className="w-full rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs font-mono text-zinc-500"
+        />
+        <div className="text-[10px] text-zinc-600">
+          Managed by TunnelDock. It inherits context from the human thread and is used for background turns.
         </div>
       </label>
 

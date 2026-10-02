@@ -239,6 +239,8 @@ pub struct ProjectRoomConfig {
     #[serde(default)]
     pub codex_thread_id: Option<String>,
     #[serde(default)]
+    pub codex_automation_thread_id: Option<String>,
+    #[serde(default)]
     pub antigravity_cascade_id: Option<String>,
     pub remote: ProjectRemote,
     pub enabled: bool,
@@ -255,6 +257,10 @@ pub struct ProjectRoomSummary {
     pub local_root: String,
     pub repo_root: String,
     pub workspace_id: Option<String>,
+    pub codex_thread_id: Option<String>,
+    pub codex_automation_thread_id: Option<String>,
+    pub codex_status: String,
+    pub codex_active_run_id: Option<String>,
     pub session_status: String,
     pub session_id: Option<String>,
     pub binding_count: u32,
@@ -419,6 +425,7 @@ mod tests {
         )
         .expect("legacy config should load");
         assert_eq!(config.codex_thread_id, None);
+        assert_eq!(config.codex_automation_thread_id, None);
         assert_eq!(config.antigravity_cascade_id, None);
         assert!(config.keep_session_alive);
 

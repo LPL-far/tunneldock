@@ -178,6 +178,15 @@ export const ProjectRoomsView: React.FC = () => {
   }, [selectedId]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => {
+      void listProjectRooms()
+        .then((list) => setSummaries(list))
+        .catch((err) => setError(String(err)));
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!selectedId || !room?.runs.some((run) =>
       ["running", "interactive"].includes(run.status)
     )) {

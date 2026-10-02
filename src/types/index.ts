@@ -165,6 +165,7 @@ export interface ProjectRoomConfig {
   repo_root: string;
   workspace_id: string | null;
   codex_thread_id: string | null;
+  codex_automation_thread_id: string | null;
   antigravity_cascade_id: string | null;
   remote: ProjectRemote;
   enabled: boolean;
@@ -179,6 +180,10 @@ export interface ProjectRoomSummary {
   local_root: string;
   repo_root: string;
   workspace_id: string | null;
+  codex_thread_id: string | null;
+  codex_automation_thread_id: string | null;
+  codex_status: string;
+  codex_active_run_id: string | null;
   session_status: WorkspaceStatus;
   session_id: string | null;
   binding_count: number;

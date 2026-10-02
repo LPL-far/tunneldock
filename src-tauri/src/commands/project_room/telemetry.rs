@@ -658,8 +658,8 @@ pub(super) fn agent_runtimes() -> Vec<AgentRuntimeInfo> {
             version: codex
                 .as_ref()
                 .and_then(|path| command_version(path, &["--version"])),
-            dispatch_mode: "shared_app_server_queue".to_string(),
-            notes: "Codex 通过 shared app-server 的 queue 命令向 Project Room 已绑定的 Codex Desktop 长期对话投递任务，并从同一 thread 收集 handoff。"
+            dispatch_mode: "background_fork_controller".to_string(),
+            notes: "Codex 保留用户原 Desktop 长期对话作为 human/canonical thread；TunnelDock 首次从它 fork 持久 automation thread，并用独立本地 app-server 在后台执行 turn，因此不依赖 Desktop 当前打开哪条对话。"
                 .to_string(),
         },
         AgentRuntimeInfo {
