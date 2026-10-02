@@ -50,7 +50,7 @@ For consultation tasks TunnelDock applies a read-only sandbox (network enabled f
 
 ## Lifecycle and failure handling
 
-- Temporary app-server PID is stored in the Project Room run and is owned by TunnelDock. WebSocket RPC reads/writes have bounded timeouts so a stuck app-server cannot block the web coordinator forever.
+- Temporary app-server PID is stored durably in the Project Room run. The worker is **task-scoped, not UI-scoped**: closing/restarting TunnelDock (including Tauri dev hot reload) must not kill an in-flight Project Room agent. On Windows TunnelDock writes a run-local `codex_worker.cmd` and asks `Win32_Process.Create` (WMI/CIM) to launch a waiting `cmd.exe` wrapper. The wrapper and Codex child therefore belong to the WMI service process tree rather than the Tauri/cargo tree. A restarted TunnelDock re-reads `runs.json`, resumes rollout polling by wrapper PID/thread/offset, and terminates the wrapper + Codex subtree only when the run completes or genuinely fails. WebSocket RPC reads/writes have bounded timeouts so a stuck app-server cannot block the web coordinator forever.
 - `turn/start` may continue after the WebSocket client disconnects; TunnelDock does not need a long-lived WebSocket connection.
 - Completion is detected from the automation thread rollout using its starting byte offset.
 - On completion/failure TunnelDock terminates the temporary app-server, releasing the automation thread writer lock.
@@ -63,7 +63,7 @@ For consultation tasks TunnelDock applies a read-only sandbox (network enabled f
 
 The Project Room list shows, for every project at the same time:
 
-- Codex state: `unbound`, `ready`, `idle`, or `running`;
+- Codex transport state: `unbound`, `untested`, `running`, `healthy`, or `degraded`;
 - shortened human thread ID;
 - shortened automation thread ID;
 - active run ID when running.
@@ -88,6 +88,8 @@ On 2026-10-02 the controller transport was exercised against all three existing 
 This verifies the property the old `codex queue` path could not guarantee: Project Room execution is driven by thread ID and app-server ownership, not by which Codex Desktop conversation is visible in the UI.
 
 A later IQA Agent incident also established an important lifecycle rule: a finished run's old app-server port may have no listener even though Codex transport is healthy. Health must come from the latest end-to-end run evidence, not stale endpoint probing.
+
+A Point Tracking implementation run established the complementary process-lifecycle rule: TunnelDock's own dev hot reload must not terminate an in-flight Codex worker. Direct Windows job-breakaway flags were rejected by the host (`Access denied`), so the final implementation uses WMI/CIM process creation. In the acceptance run, TunnelDock PID `50528` exited during hot reload while wrapper PID `48292` and Codex PID `29852` continued serving port `50819`; the restarted TunnelDock PID `65396` re-read the same persisted run and continued rollout polling while the rollout kept growing. Project Room workers are therefore durable across UI/process restarts; persisted wrapper PID/thread/rollout offset is the recovery contract.
 
 ## What is canonical?
 

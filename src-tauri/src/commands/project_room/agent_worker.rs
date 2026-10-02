@@ -227,6 +227,7 @@ pub(super) fn refresh_run_states_unlocked(
                         run.finished_at = Some(local_now_rfc3339());
                         run.error_message = Some(error.clone());
                         state.running_agent_pids.lock().remove(&run.id);
+                        codex::cleanup_worker_artifacts(&run.prompt_path);
                         let _ = record_transport_failure(
                             state,
                             project_id,
@@ -262,6 +263,7 @@ pub(super) fn refresh_run_states_unlocked(
                         let _ = kill_process_tree(pid);
                     }
                     state.running_agent_pids.lock().remove(&run.id);
+                    codex::cleanup_worker_artifacts(&run.prompt_path);
                     let _ = record_transport_failure(
                         state,
                         project_id,
@@ -401,6 +403,7 @@ pub(super) fn refresh_run_states_unlocked(
                 if let Some(pid) = run.pid {
                     let _ = kill_process_tree(pid);
                 }
+                codex::cleanup_worker_artifacts(&run.prompt_path);
             }
             run.pid = None;
             state.running_agent_pids.lock().remove(&run.id);

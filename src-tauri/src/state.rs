@@ -135,11 +135,18 @@ impl AppState {
             let _ = kill_process_tree(pid);
         }
 
-        let agent_pids: Vec<u32> = self.running_agent_pids.lock().values().copied().collect();
-        self.running_agent_pids.lock().clear();
-        for pid in agent_pids {
-            let _ = kill_process_tree(pid);
-        }
+        // Project Room agent workers are durable task processes, not UI-scoped
+        // children. In particular, a Codex background app-server may be in the
+        // middle of a long implementation/review when TunnelDock is restarted
+        // (including Tauri dev hot reload). Killing it here would convert an
+        // otherwise healthy run into `background_process_exit`. Keep the worker
+        // alive; its PID is already persisted in runs.json, so the next TunnelDock
+        // process can resume polling the rollout and will terminate the app-server
+        // when the run completes or genuinely fails.
+        //
+        // Do not clear `running_agent_pids` here either: the current AppState is
+        // being torn down, and retaining the map until drop makes the ownership
+        // semantics explicit without touching the durable child process.
 
         // 3. Persist a clean stopped state for the next launch.
         let mut list = self.workspaces.lock();

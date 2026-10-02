@@ -1,7 +1,8 @@
 use super::*;
-use crate::utils::cmd::kill_process_tree;
+use crate::utils::cmd::{execute_powershell, kill_process_tree};
 use rand::RngCore;
 use std::fmt::Write as _;
+#[cfg(not(target_os = "windows"))]
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
 use std::net::TcpListener;
@@ -216,6 +217,98 @@ fn thread_id_and_path(result: &serde_json::Value) -> Result<(String, PathBuf), S
     Ok((thread_id, path))
 }
 
+#[cfg(target_os = "windows")]
+fn powershell_single_quote(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_windows_durable_app_server(
+    executable: &Path,
+    endpoint: &str,
+    token_path: &Path,
+    log_path: &Path,
+    error_path: &Path,
+) -> Result<(u32, PathBuf), String> {
+    let run_dir = log_path
+        .parent()
+        .ok_or_else(|| format!("Codex run log 缺少父目录: {}", log_path.display()))?;
+    let launcher_path = run_dir.join("codex_worker.cmd");
+    let launcher = format!(
+        "@echo off\r\n\"{}\" app-server --listen \"{}\" --ws-auth capability-token --ws-token-file \"{}\" 1>>\"{}\" 2>>\"{}\"\r\nexit /b %ERRORLEVEL%\r\n",
+        executable.display(),
+        endpoint,
+        token_path.display(),
+        log_path.display(),
+        error_path.display(),
+    );
+    fs::write(&launcher_path, launcher)
+        .map_err(|error| format!("写入 {} 失败: {error}", launcher_path.display()))?;
+
+    let command_line = format!("cmd.exe /d /s /c \"\"{}\"\"", launcher_path.display());
+    let script = format!(
+        "$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='{}'}}; if($r.ReturnValue -ne 0){{Write-Error ('Win32_Process.Create failed: '+$r.ReturnValue); exit 1}}; [Console]::Out.Write($r.ProcessId)",
+        powershell_single_quote(&command_line)
+    );
+    let output = execute_powershell(&script, None);
+    if !output.success {
+        let _ = fs::remove_file(&launcher_path);
+        let detail = if output.stderr.trim().is_empty() {
+            output.stdout.trim().to_string()
+        } else {
+            output.stderr.trim().to_string()
+        };
+        return Err(format!("WMI 启动 Codex durable app-server 失败: {detail}"));
+    }
+    let pid = output
+        .stdout
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| format!("解析 Codex durable wrapper PID 失败: {error}"))?;
+    Ok((pid, launcher_path))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn spawn_direct_app_server(
+    executable: &Path,
+    endpoint: &str,
+    token_path: &Path,
+    log_path: &Path,
+    error_path: &Path,
+) -> Result<u32, String> {
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .map_err(|error| format!("打开 {} 失败: {error}", log_path.display()))?;
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(error_path)
+        .map_err(|error| format!("打开 {} 失败: {error}", error_path.display()))?;
+    let child = Command::new(executable)
+        .args([
+            "app-server",
+            "--listen",
+            endpoint,
+            "--ws-auth",
+            "capability-token",
+            "--ws-token-file",
+            &token_path.to_string_lossy(),
+        ])
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .map_err(|error| format!("启动 Codex background app-server 失败: {error}"))?;
+    Ok(child.id())
+}
+
+pub(super) fn cleanup_worker_artifacts(prompt_path: &str) {
+    if let Some(parent) = Path::new(prompt_path).parent() {
+        let _ = fs::remove_file(parent.join("codex_worker.cmd"));
+    }
+}
+
 pub(super) fn start_background_turn(
     executable: &Path,
     source_thread_id: &str,
@@ -239,42 +332,33 @@ pub(super) fn start_background_turn(
         std::process::id(),
         &bearer_token[..16]
     ));
-    let stdout = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .map_err(|error| format!("打开 {} 失败: {error}", log_path.display()))?;
-    let stderr = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(error_path)
-        .map_err(|error| format!("打开 {} 失败: {error}", error_path.display()))?;
     fs::write(&token_path, &bearer_token)
         .map_err(|error| format!("写入 Codex WebSocket capability token 失败: {error}"))?;
 
-    let mut command = Command::new(executable);
-    command
-        .args([
-            "app-server",
-            "--listen",
-            &endpoint,
-            "--ws-auth",
-            "capability-token",
-            "--ws-token-file",
-            &token_path.to_string_lossy(),
-        ])
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
     #[cfg(target_os = "windows")]
-    command.creation_flags(CREATE_NO_WINDOW);
-    let child = match command.spawn() {
-        Ok(child) => child,
+    let (pid, launcher_path) = match spawn_windows_durable_app_server(
+        executable,
+        &endpoint,
+        &token_path,
+        log_path,
+        error_path,
+    ) {
+        Ok(value) => value,
         Err(error) => {
             let _ = fs::remove_file(&token_path);
-            return Err(format!("启动 Codex background app-server 失败: {error}"));
+            return Err(error);
         }
     };
-    let pid = child.id();
+
+    #[cfg(not(target_os = "windows"))]
+    let pid =
+        match spawn_direct_app_server(executable, &endpoint, &token_path, log_path, error_path) {
+            Ok(pid) => pid,
+            Err(error) => {
+                let _ = fs::remove_file(&token_path);
+                return Err(error);
+            }
+        };
 
     let result = (|| -> Result<CodexDispatch, String> {
         let mut socket = connect_controller(&endpoint, &bearer_token, Duration::from_secs(5))?;
@@ -417,6 +501,8 @@ pub(super) fn start_background_turn(
     let _ = fs::remove_file(&token_path);
     if result.is_err() {
         let _ = kill_process_tree(pid);
+        #[cfg(target_os = "windows")]
+        let _ = fs::remove_file(&launcher_path);
     }
     result
 }
