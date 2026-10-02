@@ -14,7 +14,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 const REGISTRY_FILE: &str = "registry.json";
 const CONFIG_FILE: &str = "project.json";
@@ -754,6 +754,10 @@ async fn reconcile_project_sessions_once(
                         .insert(workspace_id.clone(), pid);
                 }
                 adopted_any = true;
+                let _ = app.emit(
+                    "workspace-updated",
+                    serde_json::json!({ "workspace_id": &workspace_id }),
+                );
             }
             continue;
         }

@@ -170,6 +170,21 @@ fn finish_running_call(
     state.save_history();
 }
 
+fn matching_broker_session<'a>(
+    item: &WorkspaceItem,
+    sessions: &'a [chappie_broker::BrokerSession],
+) -> Option<&'a chappie_broker::BrokerSession> {
+    let expected_cwd = item.path.replace('\\', "/").to_ascii_lowercase();
+    item.session_id
+        .as_deref()
+        .and_then(|session_id| sessions.iter().find(|session| session.id == session_id))
+        .or_else(|| {
+            sessions
+                .iter()
+                .find(|session| session.cwd.replace('\\', "/").to_ascii_lowercase() == expected_cwd)
+        })
+}
+
 #[tauri::command]
 pub async fn list_workspaces(
     state: State<'_, Arc<AppState>>,
@@ -189,12 +204,10 @@ pub async fn list_workspaces(
             item.pid = pids.get(&item.id).copied();
 
             if let Some(sessions) = broker_sessions.as_ref() {
-                let session = item
-                    .session_id
-                    .as_deref()
-                    .and_then(|session_id| sessions.iter().find(|s| s.id == session_id));
+                let session = matching_broker_session(item, sessions);
 
                 if let Some(session) = session {
+                    item.session_id = Some(session.id.clone());
                     item.binding_count = session.binding_count;
                     item.status = if matches!(session.status.as_str(), "executing" | "generating") {
                         "executing".to_string()
@@ -930,5 +943,57 @@ If the project does not exist, has multiple matches, or Pi is not online, stop a
 如果项目不存在、存在多个匹配、Pi 未在线，停止操作并告诉我当前 sessions 状态。"#,
             path
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matching_broker_session;
+    use crate::models::WorkspaceItem;
+    use crate::utils::chappie_broker::BrokerSession;
+
+    fn workspace(session_id: Option<&str>) -> WorkspaceItem {
+        WorkspaceItem {
+            id: "ws_point".to_string(),
+            name: "point_tracking".to_string(),
+            path: r"D:\point_tracking".to_string(),
+            status: "starting".to_string(),
+            session_id: session_id.map(ToOwned::to_owned),
+            pid: Some(1234),
+            binding_count: 0,
+            git_branch: None,
+            git_status: None,
+            last_started_at: None,
+            error_message: None,
+        }
+    }
+
+    fn broker(id: &str, cwd: &str) -> BrokerSession {
+        BrokerSession {
+            id: id.to_string(),
+            agent: "pi".to_string(),
+            cwd: cwd.to_string(),
+            device: "device".to_string(),
+            model: Some("chappie/chatgpt".to_string()),
+            name: None,
+            status: "idle".to_string(),
+            binding_count: 2,
+        }
+    }
+
+    #[test]
+    fn adopts_broker_session_by_cwd_when_session_id_is_missing() {
+        let item = workspace(None);
+        let sessions = vec![broker("session-point", "D:/point_tracking")];
+        let matched = matching_broker_session(&item, &sessions).expect("cwd match");
+        assert_eq!(matched.id, "session-point");
+    }
+
+    #[test]
+    fn falls_back_to_cwd_when_persisted_session_id_is_stale() {
+        let item = workspace(Some("old-session"));
+        let sessions = vec![broker("new-session", r"D:\point_tracking")];
+        let matched = matching_broker_session(&item, &sessions).expect("cwd fallback");
+        assert_eq!(matched.id, "new-session");
     }
 }
