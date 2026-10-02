@@ -24,9 +24,10 @@ This project is optimized for top-conference research, not product feature accum
 - ChatGPT Web is the coordination surface, not the raw execution log. Keep normal replies compact: default to at most 6 short bullets or roughly 500 Chinese characters / 350 English words unless the user explicitly asks for a deep dive.
 - Never paste full tool output, full worker handoffs, long code excerpts, or complete experiment logs into the web conversation. Put detail in project files/artifacts and cite paths. Keep individual Pi tool results preferably <= 8 KiB: grep/find first, then read narrow line/offset ranges. Do not batch multiple potentially-50KiB read/bash calls into one web turn; write large diagnostics to a file and inspect only decisive slices.
 - The consultation barrier is durable Project Room state, not a reason to keep one browser response stream open. Poll `.tunneldock/web_status.json` at most 5 times / about 20 seconds in one web turn. If its `state_token` is unchanged and the gate remains closed, end with a compact checkpoint and resume on the next user turn. Do not reread `web_context.json` or logs while the token is unchanged.
-- For multi-agent consultation, never synthesize while `ready_for_review=false`. Once ready, read `web_context.json` and every successful worker handoff in full, then report only consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
+- For multi-agent consultation, never synthesize while `ready_for_review=false`. `review_only` consultation finalizes after `consult.reviewed`; `durable` consultation additionally requires canonical memory commit and cleanup. Once ready, read `web_context.json` and every successful worker handoff in full, then report only consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
 - After reading all settled worker evidence and completing its own review, ChatGPT must emit `consult.reviewed`, update canonical project memory and emit `memory.commit`, then perform cleanup/integration and emit `cleanup.commit`. A consultation is final only when the barrier state is `finalized`. If a worker failed/blocked, report it as missing evidence rather than inventing consensus.
 - Prefer one focused consultation round over open-ended agent-to-agent chatting. Start another round only when a concrete unresolved question remains.
+- Throughput rule: clear `web_status.actions` before scheduling more work. A worker handoff is not task completion; non-consultation work reaches `completed` only after ChatGPT emits `task.review=accept` based on a real completed run + handoff + decisive verification.
 
 ## Review and decision rules
 - Gemini modifications to core model/training/data code require Codex review before acceptance.
@@ -68,7 +69,8 @@ Use this when ChatGPT wants Codex and/or Gemini to independently inspect the sam
   "title": "Check whether the geometry gate is actually needed",
   "question": "Inspect current code and evidence independently. State facts, disagreement with the current interpretation if any, one recommendation, and the main uncertainty.",
   "agents": ["codex", "gemini"],
-  "thread_id": "optional-existing-CONSULT-id-for-one-focused-follow-up"
+  "thread_id": "optional-existing-CONSULT-id-for-one-focused-follow-up",
+  "finalization": "review_only"
 }
 ```
 
@@ -139,6 +141,7 @@ Use this only after the human researcher has made the final decision. Record the
 ```
 
 ## task.create
+Codex/Gemini tasks auto-dispatch by default when this event comes from the Web coordinator; set `auto_dispatch=false` only to intentionally create backlog. If a non-consultation task is already awaiting Web review, TunnelDock rejects additional Web-created work unless the user explicitly requested parallel urgent work and the event sets `override_pending_actions=true`.
 ```json
 {
   "kind": "task.create",
@@ -147,7 +150,8 @@ Use this only after the human researcher has made the final decision. Record the
   "goal": "Completion criteria and research reason.",
   "owner": "codex",
   "reviewers": ["chatgpt"],
-  "write_scope": ["model/decoder/**"]
+  "write_scope": ["model/decoder/**"],
+  "auto_dispatch": true
 }
 ```
 
@@ -158,7 +162,19 @@ Use this only after the human researcher has made the final decision. Record the
   "author": "codex",
   "task_id": "TASK-...",
   "status": "review",
-  "summary": "What changed, tests/evidence, remaining risks, and requested review."
+  "summary": "Outcome, changed files, exact verification, evidence paths, cleanup, risks, requested review."
+}
+```
+
+## task.review
+ChatGPT Web uses this to close a non-consultation work task after personally checking the handoff and decisive source/test evidence. `accept` requires a real completed worker run and non-empty HANDOFF; `revise` requeues the same task with the review summary fed into the next worker attempt; `block` stops it with an explicit reason; `supersede` closes an obsolete review/blocked/backlog item so stale work does not remain pending forever.
+```json
+{
+  "kind": "task.review",
+  "author": "chatgpt",
+  "task_id": "TASK-...",
+  "decision": "accept",
+  "summary": "Verified the intended diff and the focused tests pass; no unresolved scope issue."
 }
 ```
 
@@ -180,8 +196,8 @@ Use this only after the human researcher has made the final decision. Record the
 Rules:
 - Do not edit `project_room.json` directly; it is generated state.
 - Do not use this inbox as a raw chat dump. Post only decisions, disagreements, review requests, handoffs, and reproducible evidence that another agent needs.
-- `consult.request` is read-only by default. Keep each worker's final answer under 1200 characters. TunnelDock assigns one `consultation_id` to the whole round. Poll `.tunneldock/web_status.json` for the barrier; `web_context.json` is detail-on-demand.
-- ChatGPT must not synthesize or recommend from partial results. Poll `web_status.json` for no more than 5 cycles / about 20 seconds in one browser turn. If unchanged, emit only a compact checkpoint and let the next user turn resume from `state_token`. If `state=invalid_handoff`, send one `consult.retry` for the listed `invalid_handoffs`. Once `ready_for_review=true`, read `web_context.json` and every successful full handoff, perform your own review, write `consult.reviewed`, update canonical memory and write `memory.commit`, then clean/integrate obsolete memory/docs/code/logs/scratch and write `cleanup.commit`. Wait until state=`finalized` before the final human-facing analysis.
+- `consult.request` is read-only by default. Keep each worker's final answer under 1200 characters. `finalization=review_only` is the default for advisory analysis and finalizes immediately after `consult.reviewed`; use `finalization=durable` only when the consultation changes canonical project truth/results and therefore requires memory + cleanup. TunnelDock assigns one `consultation_id` to the whole round. Poll `.tunneldock/web_status.json` for the barrier; `web_context.json` is detail-on-demand.
+- At the start of every web turn, process `web_status.json.actions` in priority order before creating more work. A `review_task` action must end in `task.review` accept/revise/block/supersede; old `dispatch_backlog` items must be explicitly dispatched or superseded instead of silently accumulating. ChatGPT must not synthesize or recommend from partial results. Poll `web_status.json` for no more than 5 cycles / about 20 seconds in one browser turn. If unchanged, emit only a compact checkpoint and let the next user turn resume from `state_token`. If `state=invalid_handoff`, send one `consult.retry` for the listed `invalid_handoffs`. Once `ready_for_review=true`, read `web_context.json` and every successful full handoff, perform your own review, and write `consult.reviewed`. For `review_only`, that finalizes the consultation. For `durable`, then update canonical memory/write `memory.commit`, perform cleanup/integration/write `cleanup.commit`, and wait until state=`finalized` before the final human-facing analysis.
 - If the two agents materially disagree, ChatGPT may issue one focused follow-up `consult.request` with the same `thread_id`. The follow-up gets a new `consultation_id`, so it has its own barrier. Avoid recursive debate unless the user explicitly asks for it.
 - Before asking the human to decide a code/method question, ChatGPT must personally inspect the relevant diff or source files and surface only the decisive code-review points; worker handoffs are evidence, not a substitute for review.
 - `decision.record` is written only after the human researcher explicitly decides. Keep it concise and durable; never record an unresolved recommendation as a decision.
@@ -221,6 +237,16 @@ fn compact_json_fields(value: &serde_json::Value, limits: &[(&str, usize)]) -> s
     compact
 }
 
+fn value_identity(value: &serde_json::Value) -> String {
+    for key in ["id", "consultation_id", "task_id"] {
+        let candidate = json_str(value, key);
+        if !candidate.is_empty() {
+            return format!("{}:{}", key, candidate);
+        }
+    }
+    serde_json::to_string(value).unwrap_or_default()
+}
+
 fn select_relevant_values<F>(
     values: &[serde_json::Value],
     priority: F,
@@ -236,8 +262,7 @@ where
         if selected.len() >= total_limit {
             break;
         }
-        let id = json_str(value, "id");
-        if id.is_empty() || ids.insert(id.to_string()) {
+        if ids.insert(value_identity(value)) {
             selected.push(value.clone());
         }
     }
@@ -245,8 +270,7 @@ where
         if selected.len() >= total_limit {
             break;
         }
-        let id = json_str(value, "id");
-        if id.is_empty() || ids.insert(id.to_string()) {
+        if ids.insert(value_identity(value)) {
             selected.push(value.clone());
         }
     }
@@ -373,10 +397,20 @@ fn consultation_barriers(tasks: &[ProjectTask], runs: &[AgentRun]) -> Vec<serde_
         let ready_for_review = all_settled && successful_handoffs_ready;
         let web_review_complete =
             ready_for_review && members.iter().all(|member| member.web_reviewed);
-        let memory_commit_complete =
-            web_review_complete && members.iter().all(|member| member.memory_committed);
-        let cleanup_commit_complete =
-            memory_commit_complete && members.iter().all(|member| member.cleanup_committed);
+        let finalization_policy = if members
+            .iter()
+            .any(|member| member.finalization_policy == "durable")
+        {
+            "durable"
+        } else {
+            "review_only"
+        };
+        let memory_commit_required = finalization_policy == "durable";
+        let cleanup_commit_required = finalization_policy == "durable";
+        let memory_commit_complete = web_review_complete
+            && (!memory_commit_required || members.iter().all(|member| member.memory_committed));
+        let cleanup_commit_complete = memory_commit_complete
+            && (!cleanup_commit_required || members.iter().all(|member| member.cleanup_committed));
         let waiting_for = agents
             .iter()
             .filter(|agent| {
@@ -405,6 +439,9 @@ fn consultation_barriers(tasks: &[ProjectTask], runs: &[AgentRun]) -> Vec<serde_
             "created_at": task.created_at,
             "ready_for_review": ready_for_review,
             "web_review_complete": web_review_complete,
+            "finalization_policy": finalization_policy,
+            "memory_commit_required": memory_commit_required,
+            "cleanup_commit_required": cleanup_commit_required,
             "memory_commit_complete": memory_commit_complete,
             "cleanup_commit_complete": cleanup_commit_complete,
             "all_settled": all_settled,
@@ -425,7 +462,11 @@ fn consultation_barriers(tasks: &[ProjectTask], runs: &[AgentRun]) -> Vec<serde_
             "waiting_for": waiting_for,
             "invalid_handoffs": invalid_handoffs,
             "agents": agents,
-            "review_rule": "Do not synthesize partial worker results. After ready_for_review=true, read every successful handoff in full and write consult.reviewed. Then update canonical memory and write memory.commit. Finally clean/consolidate obsolete docs/code/logs/scratch and write cleanup.commit. Only state=finalized permits the final human-facing consultation analysis.",
+            "review_rule": if finalization_policy == "durable" {
+                "Do not synthesize partial worker results. After ready_for_review=true, read every successful handoff in full and write consult.reviewed. This consultation is durable: update canonical memory and write memory.commit, then cleanup.commit. Only state=finalized permits the final human-facing consultation analysis."
+            } else {
+                "Do not synthesize partial worker results. After ready_for_review=true, read every successful handoff in full and write consult.reviewed. This consultation is review_only and finalizes immediately after Web review; do not run memory/cleanup unless the user or new evidence makes the result canonical."
+            },
         }));
     }
 
@@ -464,6 +505,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
                 "memory_committed": task.memory_committed,
                 "cleanup_committed": task.cleanup_committed,
                 "auto_dispatch": task.auto_dispatch,
+                "finalization_policy": task.finalization_policy,
                 "created_at": task.created_at,
                 "updated_at": task.updated_at,
             })
@@ -664,7 +706,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "awaiting_web_reviews": awaiting_web_reviews,
         "awaiting_memory_commits": awaiting_memory_commits,
         "awaiting_cleanups": awaiting_cleanups,
-        "rule": "A consultation is final only when state=finalized. Wait for workers, review all handoffs, commit canonical memory, compact over-budget current memory into archive when memory.health.requires_compaction=true, then clean/consolidate obsolete documents, code, logs and scratch and write cleanup.commit. Failed/blocked agents are missing evidence, never consensus."
+        "rule": "A consultation is final only when state=finalized. review_only finalizes after all workers settle and ChatGPT submits consult.reviewed. durable additionally requires canonical memory commit and cleanup/integration. Failed/blocked agents are missing evidence, never consensus."
     });
 
     let status_tasks = web_tasks
@@ -672,7 +714,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         .filter(|task| {
             matches!(
                 json_str(task, "status"),
-                "queued" | "active" | "running" | "interactive" | "review" | "blocked"
+                "queued" | "active" | "running" | "interactive" | "review" | "blocked" | "failed"
             )
         })
         .take(8)
@@ -695,6 +737,9 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
                 "state": consultation.get("state"),
                 "ready_for_review": consultation.get("ready_for_review"),
                 "web_review_complete": consultation.get("web_review_complete"),
+                "finalization_policy": consultation.get("finalization_policy"),
+                "memory_commit_required": consultation.get("memory_commit_required"),
+                "cleanup_commit_required": consultation.get("cleanup_commit_required"),
                 "memory_commit_complete": consultation.get("memory_commit_complete"),
                 "cleanup_commit_complete": consultation.get("cleanup_commit_complete"),
                 "waiting_for": consultation.get("waiting_for"),
@@ -702,6 +747,119 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             })
         })
         .collect::<Vec<_>>();
+    let mut web_actions = Vec::new();
+    for task in snapshot.tasks.iter().take(40) {
+        if task.kind == "consultation" {
+            continue;
+        }
+        match task.status.as_str() {
+            "review" => {
+                let handoff_path = snapshot
+                    .runs
+                    .iter()
+                    .find(|run| run.task_id == task.id)
+                    .map(|run| run.output_path.clone());
+                web_actions.push(serde_json::json!({
+                    "priority": 10,
+                    "kind": "review_task",
+                    "task_id": task.id,
+                    "title": task.title,
+                    "owner": task.owner,
+                    "handoff_path": handoff_path,
+                    "instruction": "Inspect the handoff and decisive source/test evidence, then emit task.review with accept/revise/block/supersede."
+                }));
+            }
+            "blocked" | "failed" => web_actions.push(serde_json::json!({
+                "priority": 30,
+                "kind": "resolve_blocked",
+                "task_id": task.id,
+                "title": task.title,
+                "owner": task.owner,
+                "summary": clip_text(&task.summary, 500),
+                "instruction": "Use task.review=revise after fixing/clarifying the blocker, or task.review=supersede if the task is obsolete."
+            })),
+            "backlog" if matches!(task.owner.as_str(), "codex" | "gemini") => {
+                web_actions.push(serde_json::json!({
+                    "priority": 40,
+                    "kind": "dispatch_backlog",
+                    "task_id": task.id,
+                    "title": task.title,
+                    "owner": task.owner,
+                    "instruction": "Confirm this old backlog task is still needed; use task.review=revise to requeue/auto-dispatch it, or task.review=supersede to close it."
+                }));
+            }
+            _ => {}
+        }
+    }
+    for consultation in &web_consultations {
+        let state = json_str(consultation, "state");
+        let consultation_id = consultation.get("consultation_id").cloned();
+        let action = match state {
+            "invalid_handoff" => Some(serde_json::json!({
+                "priority": 5,
+                "kind": "retry_consultation",
+                "consultation_id": consultation_id,
+                "invalid_handoffs": consultation.get("invalid_handoffs"),
+            })),
+            "awaiting_web_review" | "awaiting_web_review_with_failures" => {
+                Some(serde_json::json!({
+                    "priority": 8,
+                    "kind": "review_consultation",
+                    "consultation_id": consultation_id,
+                    "has_failures": consultation.get("has_failures"),
+                    "instruction": "Read every successful handoff and decisive source evidence, then emit consult.reviewed."
+                }))
+            }
+            "awaiting_memory_commit" => Some(serde_json::json!({
+                "priority": 15,
+                "kind": "memory_commit",
+                "consultation_id": consultation_id,
+            })),
+            "awaiting_cleanup" => Some(serde_json::json!({
+                "priority": 20,
+                "kind": "cleanup_commit",
+                "consultation_id": consultation_id,
+            })),
+            _ => None,
+        };
+        if let Some(action) = action {
+            web_actions.push(action);
+        }
+    }
+    web_actions.sort_by_key(|action| {
+        action
+            .get("priority")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(u64::MAX)
+    });
+
+    let work_count = |status: &str| {
+        snapshot
+            .tasks
+            .iter()
+            .filter(|task| task.kind != "consultation" && task.status == status)
+            .count()
+    };
+    let backlog_count = work_count("backlog");
+    let queued_count = work_count("queued");
+    let active_count = work_count("active");
+    let review_count = work_count("review");
+    let blocked_count = work_count("blocked");
+    let failed_count = work_count("failed");
+    let completed_count = work_count("completed");
+    let completion_debt = backlog_count + review_count + blocked_count + failed_count;
+    let throughput = serde_json::json!({
+        "backlog": backlog_count,
+        "queued": queued_count,
+        "active": active_count,
+        "review": review_count,
+        "blocked": blocked_count,
+        "failed": failed_count,
+        "completed": completed_count,
+        "completion_debt": completion_debt,
+        "action_count": web_actions.len(),
+    });
+
     let status_transports = snapshot
         .transports
         .iter()
@@ -721,13 +879,17 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "tasks": &status_tasks,
         "consultations": &status_consultations,
         "transports": &status_transports,
+        "actions": &web_actions,
+        "throughput": &throughput,
         "review_gate": &review_gate,
     });
     let state_token = stable_state_token(&status_core);
     let web_status = serde_json::json!({
         "project_id": &snapshot.config.id,
         "state_token": state_token,
-        "has_pending_work": !status_tasks.is_empty() || !status_consultations.is_empty(),
+        "has_pending_work": !status_tasks.is_empty() || !status_consultations.is_empty() || !web_actions.is_empty(),
+        "actions": web_actions,
+        "throughput": throughput,
         "tasks": status_tasks,
         "consultations": status_consultations,
         "transports": status_transports,
@@ -737,6 +899,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             "poll_interval_seconds": 4,
             "max_inline_wait_seconds": 20,
             "max_poll_cycles": 5,
+            "max_actions_per_turn": 4,
             "unchanged_state": "If state_token is unchanged, do not reread web_context.json or full logs.",
             "timeout_action": "End the current web stream with a compact checkpoint and no substantive conclusion. On the next user turn, reread web_status.json and continue from state_token. Logical consultation barriers remain persisted on disk."
         }
@@ -1056,6 +1219,35 @@ fn validate_memory_commit_files(
     Ok(())
 }
 
+fn validate_work_task_acceptance(task: &ProjectTask, runs: &[AgentRun]) -> Result<(), String> {
+    if !matches!(task.owner.as_str(), "codex" | "gemini") {
+        return Ok(());
+    }
+    let completed_run = runs
+        .iter()
+        .filter(|run| run.task_id == task.id && run.status == "completed")
+        .max_by_key(|run| run.started_at.as_str())
+        .ok_or_else(|| {
+            format!(
+                "task.review 拒绝 accept：{} 没有真实 completed worker run",
+                task.id
+            )
+        })?;
+    let handoff = fs::read_to_string(&completed_run.output_path).map_err(|error| {
+        format!(
+            "task.review 读取 handoff 失败 {}: {}",
+            completed_run.output_path, error
+        )
+    })?;
+    if handoff.trim().is_empty() {
+        return Err(format!(
+            "task.review 拒绝 accept：{} 的 HANDOFF 为空",
+            task.id
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn process_project_event_unlocked(
     state: &AppState,
     project_id: &str,
@@ -1328,6 +1520,7 @@ pub(super) fn process_project_event_unlocked(
             }
 
             for index in member_indexes {
+                tasks[index].status = "completed".to_string();
                 tasks[index].web_reviewed = true;
                 tasks[index].memory_committed = false;
                 tasks[index].cleanup_committed = false;
@@ -1391,6 +1584,15 @@ pub(super) fn process_project_event_unlocked(
                     "memory.commit 找不到 consultation_id: {}",
                     consultation_id
                 ));
+            }
+            if member_indexes
+                .iter()
+                .all(|index| tasks[*index].finalization_policy != "durable")
+            {
+                return Err(
+                    "memory.commit 不适用于 review_only consultation；Web review 后已可 finalized"
+                        .to_string(),
+                );
             }
             if member_indexes
                 .iter()
@@ -1491,6 +1693,15 @@ pub(super) fn process_project_event_unlocked(
                     "cleanup.commit 找不到 consultation_id: {}",
                     consultation_id
                 ));
+            }
+            if member_indexes
+                .iter()
+                .all(|index| tasks[*index].finalization_policy != "durable")
+            {
+                return Err(
+                    "cleanup.commit 不适用于 review_only consultation；无需全项目清理 gate"
+                        .to_string(),
+                );
             }
             if member_indexes
                 .iter()
@@ -1610,6 +1821,19 @@ pub(super) fn process_project_event_unlocked(
                 }
             };
             let consultation_id = next_id("CONSULTATION");
+            let finalization_policy = {
+                let requested = event_string(value, "finalization");
+                match requested.as_str() {
+                    "durable" => "durable".to_string(),
+                    "review_only" | "" => "review_only".to_string(),
+                    other => {
+                        return Err(format!(
+                            "consult.request finalization 不支持: {} (仅支持 review_only/durable)",
+                            other
+                        ))
+                    }
+                }
+            };
             let tasks_path = dir.join(TASKS_FILE);
             let mut tasks = read_json::<Vec<ProjectTask>>(&tasks_path)?;
             for agent in &agents {
@@ -1631,6 +1855,7 @@ pub(super) fn process_project_event_unlocked(
                         memory_committed: false,
                         cleanup_committed: false,
                         auto_dispatch: true,
+                        finalization_policy: finalization_policy.clone(),
                         created_at: now.clone(),
                         updated_at: now.clone(),
                     },
@@ -1682,10 +1907,28 @@ pub(super) fn process_project_event_unlocked(
 
             let path = dir.join(TASKS_FILE);
             let mut tasks = read_json::<Vec<ProjectTask>>(&path)?;
+            let override_pending_actions = value
+                .get("override_pending_actions")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if author == "chatgpt" && !override_pending_actions {
+                let pending_reviews = tasks
+                    .iter()
+                    .filter(|task| task.kind != "consultation" && task.status == "review")
+                    .map(|task| task.id.clone())
+                    .take(6)
+                    .collect::<Vec<_>>();
+                if !pending_reviews.is_empty() {
+                    return Err(format!(
+                        "task.create 暂停：先完成 pending review {}。请写 task.review；只有用户明确要求并行时才设置 override_pending_actions=true。",
+                        pending_reviews.join(", ")
+                    ));
+                }
+            }
             let auto_dispatch = value
                 .get("auto_dispatch")
                 .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
+                .unwrap_or(matches!(owner.as_str(), "codex" | "gemini"));
             tasks.insert(
                 0,
                 ProjectTask {
@@ -1715,11 +1958,118 @@ pub(super) fn process_project_event_unlocked(
                     memory_committed: false,
                     cleanup_committed: false,
                     auto_dispatch,
+                    finalization_policy: "work".to_string(),
                     created_at: now.clone(),
                     updated_at: now,
                 },
             );
             write_json(&path, &tasks)?;
+        }
+        "task.review" => {
+            if author != "chatgpt" {
+                return Err("task.review 只能由 ChatGPT Web 最终 reviewer 提交".to_string());
+            }
+            let task_id = event_string(value, "task_id");
+            let decision = event_string(value, "decision");
+            let review_summary = event_string(value, "summary");
+            if task_id.is_empty() || decision.is_empty() || review_summary.is_empty() {
+                return Err("task.review 需要 task_id、decision 和非空 summary".to_string());
+            }
+            if !matches!(
+                decision.as_str(),
+                "accept" | "revise" | "block" | "supersede"
+            ) {
+                return Err("task.review decision 仅支持 accept/revise/block/supersede".to_string());
+            }
+
+            let tasks_path = dir.join(TASKS_FILE);
+            let mut tasks = read_json::<Vec<ProjectTask>>(&tasks_path)?;
+            let task = tasks
+                .iter_mut()
+                .find(|task| task.id == task_id)
+                .ok_or_else(|| format!("task.review 找不到 {}", task_id))?;
+            if task.kind == "consultation" {
+                return Err("task.review 不用于 consultation；请使用 consult.reviewed".to_string());
+            }
+            if !matches!(
+                task.status.as_str(),
+                "review" | "blocked" | "backlog" | "failed"
+            ) {
+                return Err(format!(
+                    "task.review 只能处理 review/blocked/backlog/failed task，当前 {} 为 {}",
+                    task.id, task.status
+                ));
+            }
+
+            if decision == "accept" {
+                let runs = read_json::<Vec<AgentRun>>(&dir.join(RUNS_FILE))?;
+                validate_work_task_acceptance(task, &runs)?;
+            }
+
+            match decision.as_str() {
+                "accept" => {
+                    if task.status != "review" {
+                        return Err("只有 review 状态的 task 可以 accept".to_string());
+                    }
+                    task.status = "completed".to_string();
+                    task.auto_dispatch = false;
+                    task.web_reviewed = true;
+                }
+                "revise" => {
+                    task.status = "queued".to_string();
+                    task.auto_dispatch = matches!(task.owner.as_str(), "codex" | "gemini");
+                    task.web_reviewed = false;
+                    task.memory_committed = false;
+                    task.cleanup_committed = false;
+                }
+                "block" => {
+                    task.status = "blocked".to_string();
+                    task.auto_dispatch = false;
+                    task.web_reviewed = true;
+                }
+                "supersede" => {
+                    task.status = "superseded".to_string();
+                    task.auto_dispatch = false;
+                    task.web_reviewed = true;
+                }
+                _ => unreachable!(),
+            }
+            task.summary = review_summary.clone();
+            task.updated_at = now.clone();
+            let thread_id = if task.thread_id.is_empty() {
+                task.id.clone()
+            } else {
+                task.thread_id.clone()
+            };
+            let reviewed_owner = task.owner.clone();
+            write_json(&tasks_path, &tasks)?;
+
+            let discussion_path = dir.join(DISCUSSION_FILE);
+            let mut messages = read_json::<Vec<ProjectDiscussionMessage>>(&discussion_path)?;
+            messages.insert(
+                0,
+                ProjectDiscussionMessage {
+                    id: next_id("MSG"),
+                    thread_id,
+                    author,
+                    recipients: vec![reviewed_owner],
+                    message: format!(
+                        "Task review {} for {}{}",
+                        decision,
+                        task_id,
+                        if review_summary.is_empty() {
+                            ".".to_string()
+                        } else {
+                            format!(": {}", clip_text(&review_summary, 1_200))
+                        }
+                    ),
+                    created_at: now,
+                },
+            );
+            if messages.len() > 5_000 {
+                messages.truncate(5_000);
+            }
+            write_json(&discussion_path, &messages)?;
         }
         "task.handoff" => {
             let task_id = event_string(value, "task_id");
@@ -1730,10 +2080,15 @@ pub(super) fn process_project_event_unlocked(
 
             let status = {
                 let status = event_string(value, "status");
-                if status.is_empty() {
-                    "review".to_string()
-                } else {
-                    status
+                match status.as_str() {
+                    "" | "review" | "completed" => "review".to_string(),
+                    "blocked" | "failed" => status,
+                    other => {
+                        return Err(format!(
+                            "task.handoff status 不支持: {} (仅支持 review/blocked/failed)",
+                            other
+                        ))
+                    }
                 }
             };
             let tasks_path = dir.join(TASKS_FILE);
@@ -2010,7 +2365,10 @@ pub(super) fn reconcile_project_operational_state_once(
 
 #[cfg(test)]
 mod tests {
-    use super::{consultation_barriers, validate_cleanup_commit, validate_memory_commit_files};
+    use super::{
+        consultation_barriers, select_relevant_values, validate_cleanup_commit,
+        validate_memory_commit_files, validate_work_task_acceptance,
+    };
     use crate::models::{AgentRun, ProjectTask};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2032,6 +2390,7 @@ mod tests {
             memory_committed: false,
             cleanup_committed: false,
             auto_dispatch: true,
+            finalization_policy: "durable".to_string(),
             created_at: "2026-10-01T22:00:00+08:00".to_string(),
             updated_at: "2026-10-01T22:00:00+08:00".to_string(),
         }
@@ -2124,6 +2483,72 @@ mod tests {
         assert_eq!(barriers[0]["cleanup_commit_complete"], true);
 
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn review_only_consultation_finalizes_after_web_review() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tunneldock-review-only-{nonce}"));
+        fs::create_dir_all(&root).expect("temp dir");
+        let codex_path = root.join("codex.md");
+        fs::write(&codex_path, "codex answer").expect("handoff");
+
+        let mut task = task("TASK-CODEX", "codex", "review", false);
+        task.finalization_policy = "review_only".to_string();
+        let run = run(
+            "TASK-CODEX",
+            "codex",
+            codex_path.to_string_lossy().to_string(),
+        );
+        let tasks = vec![task.clone()];
+        let barriers = consultation_barriers(&tasks, &[run.clone()]);
+        assert_eq!(barriers[0]["state"], "awaiting_web_review");
+        assert_eq!(barriers[0]["memory_commit_required"], false);
+        assert_eq!(barriers[0]["cleanup_commit_required"], false);
+
+        task.web_reviewed = true;
+        let barriers = consultation_barriers(&[task], &[run]);
+        assert_eq!(barriers[0]["state"], "finalized");
+        assert_eq!(barriers[0]["memory_commit_complete"], true);
+        assert_eq!(barriers[0]["cleanup_commit_complete"], true);
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn work_acceptance_requires_completed_run_and_nonempty_handoff() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tunneldock-work-accept-{nonce}"));
+        fs::create_dir_all(&root).expect("temp dir");
+        let handoff = root.join("HANDOFF.md");
+        let mut work = task("TASK-WORK", "codex", "review", false);
+        work.kind = "work".to_string();
+        work.finalization_policy = "work".to_string();
+
+        assert!(validate_work_task_acceptance(&work, &[]).is_err());
+        fs::write(&handoff, "").expect("empty handoff");
+        let run = run("TASK-WORK", "codex", handoff.to_string_lossy().to_string());
+        assert!(validate_work_task_acceptance(&work, &[run.clone()]).is_err());
+        fs::write(&handoff, "Outcome: DONE\nVerification: tests passed").expect("handoff");
+        validate_work_task_acceptance(&work, &[run]).expect("valid work evidence");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn compact_selection_deduplicates_consultations_without_id_field() {
+        let value = serde_json::json!({
+            "consultation_id": "CONSULT-1",
+            "state": "awaiting_web_review"
+        });
+        let selected = select_relevant_values(&[value.clone()], |_| true, 6);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["consultation_id"], "CONSULT-1");
     }
 
     #[test]

@@ -73,7 +73,8 @@ const emptyTask = (): ProjectTask => ({
   web_reviewed: false,
   memory_committed: false,
   cleanup_committed: false,
-  auto_dispatch: false,
+  auto_dispatch: true,
+  finalization_policy: "work",
   created_at: "",
   updated_at: "",
 });

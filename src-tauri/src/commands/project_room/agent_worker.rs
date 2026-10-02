@@ -86,10 +86,19 @@ pub(super) fn task_prompt(
             output_path.display()
         )
     };
+    let retry_context =
+        if !is_consultation && task.status == "queued" && !task.summary.trim().is_empty() {
+            format!(
+                "\nPrior review feedback / retry context:\n{}\n",
+                task.summary.chars().take(2_000).collect::<String>()
+            )
+        } else {
+            String::new()
+        };
     let response_rule = if is_consultation {
         "This is a consultation round. Keep the final response under 1200 characters and write the final handoff in plain English UTF-8. Give only: Facts, Interpretation/Disagreement, Recommendation, and the single most important uncertainty. Do not repeat logs or long code excerpts. The web coordinator will localize the final synthesis for the user."
     } else {
-        "Keep the final handoff concise. Before handoff, clean the scope you touched: remove superseded code/scripts, disposable scratch and redundant logs; merge stale/current documentation into one authoritative document; retain a log only when it contains unique reproducibility/debug evidence and point to that evidence instead of pasting it. Do not paste raw logs or large code excerpts; point to files/artifacts and mention what was removed/consolidated/retained."
+        "This is an execution task. Do not hand off merely because code was edited. Finish the requested scope, run the smallest sufficient verification, and clean the touched scope first. The final handoff must be compact and evidence-oriented. If completion is blocked, say BLOCKED and name the exact dependency; never present partial work as done."
     };
     let workspace_rule = if agent_id == "codex" {
         "This run executes on a TunnelDock-managed Codex automation thread forked from the project's human/canonical Codex conversation. Continue using the workspace inherited from that human thread for code edits. The Project Room local root below is the coordination/memory root; do not migrate or duplicate the existing code workspace into it."
@@ -105,7 +114,7 @@ Task ID: {task_id}
 Task: {title}
 Goal / completion criteria:
 {goal}
-
+{retry_context}
 Project boundaries:
 - Project Room local root: {local}
 - {workspace_rule}
@@ -128,12 +137,15 @@ If the task is underspecified or conflicts with current evidence, state the conf
 After implementation, run the smallest sufficient correctness checks.
 {response_rule}
 Your final response must be a concise handoff with:
-1. Summary
-2. Files changed
-3. Tests / experiment evidence
-4. Remaining risks
-5. Questions or requested review
-6. Memory/experiment updates that should be made
+1. Outcome: DONE or BLOCKED
+2. Summary: what is now actually complete
+3. Files changed: exact paths, or "none"
+4. Verification: exact tests/commands run and pass/fail result; if none, explain why
+5. Evidence/artifacts: exact result/log/figure paths needed for review
+6. Cleanup: obsolete/scratch/log files removed, consolidated, or intentionally retained
+7. Remaining risks/blockers
+8. Requested review: the smallest decisive thing the reviewer must check
+9. Memory/experiment updates that should be made
 
 {handoff_delivery}
 "#,
@@ -143,6 +155,7 @@ Your final response must be a concise handoff with:
         task_id = task.id,
         title = task.title,
         goal = task.goal,
+        retry_context = retry_context,
         local = snapshot.config.local_root,
         remote_host = snapshot.config.remote.host,
         remote_root = snapshot.config.remote.root,

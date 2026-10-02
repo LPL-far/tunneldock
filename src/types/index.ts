@@ -158,6 +158,7 @@ export interface ProjectTask {
   memory_committed: boolean;
   cleanup_committed: boolean;
   auto_dispatch: boolean;
+  finalization_policy: string;
   created_at: string;
   updated_at: string;
 }

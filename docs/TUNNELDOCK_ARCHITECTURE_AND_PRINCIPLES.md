@@ -213,6 +213,35 @@ Project Room 的逻辑任务状态与浏览器单次 response stream 分离：
 
 这样“等待 Agent 全部完成”仍由持久 barrier 保证，但不再要求一个浏览器 stream 长时间保持开启，从而降低 `Resume stream unavailable`、重放大 payload 与 UI 事件风暴的概率。
 
+#### Project Room 执行闭环与 Completion Debt
+Project Room 不再把“创建任务”“worker 回复”“真正完成”混为一谈：
+
+```text
+task.create (Codex/Gemini 默认 auto-dispatch)
+    ↓
+queued → active → worker run
+    ↓
+真实 completed run + HANDOFF.md
+    ↓
+review
+    ↓
+web_status.actions / ChatGPT Web review
+    ├─ accept     → completed
+    ├─ revise     → queued（review feedback 自动带入下一次 worker prompt）
+    ├─ block      → blocked
+    └─ supersede  → superseded
+```
+
+- Web 创建 Codex/Gemini work task 时默认立即入队；只有明确设置 `auto_dispatch=false` 才形成 backlog。
+- worker handoff 永远不直接等于 completed。对 Codex/Gemini work task，`task.review=accept` 必须存在真实 `completed` run、非空 HANDOFF，并由 Web 写入 review summary。
+- `web_status.json.actions` 是网页端行动队列；Web 每轮先处理高优先级 review/retry，再创建新任务。存在未 review 的 work task 时，新的 Web `task.create` 默认被后端拒绝，除非用户明确要求并行并设置 override。
+- `revise` 复用同一个 task，不复制 V2/V3 任务；review feedback 自动进入下一次 worker prompt。
+- `blocked/failed/backlog` 不再静默堆积：Web 必须 revise、block 或 supersede；过时任务通过 supersede 正式关闭。
+- `web_status.throughput` 暴露 backlog/queued/active/review/blocked/failed/completed 和 `completion_debt`，从“任务数量”转为观察“真正闭环数量”。
+- consultation 默认 `review_only`：worker 全部结束并经 Web `consult.reviewed` 后即可 finalized。只有会改变 canonical project truth / accepted result 的咨询才用 `durable`，继续要求 memory.commit + cleanup.commit；后端拒绝对 review_only 误跑重型 memory/cleanup gate。
+
+这套规则的目标是提高 **completed throughput**，而不是提高“同时挂起的任务数”。
+
 #### 自动化绑定提示词生成（Prompt Generation）
 为了减少用户在网页端的繁琐配置，TunnelDock 支持一键生成与 ChatGPT 绑定的系统级指令提示词：
 ```text
