@@ -34,6 +34,33 @@ fn durable_pi_runtime_dir(state: &AppState, workspace_id: &str) -> PathBuf {
 }
 
 #[cfg(target_os = "windows")]
+fn durable_session_hint_path(state: &AppState, workspace_id: &str) -> PathBuf {
+    durable_pi_runtime_dir(state, workspace_id).join("session.id")
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn persist_durable_session_hint(state: &AppState, workspace_id: &str, session_id: &str) {
+    if !state.workspace_is_durable_project(workspace_id) || session_id.trim().is_empty() {
+        return;
+    }
+    let runtime_dir = durable_pi_runtime_dir(state, workspace_id);
+    if fs::create_dir_all(&runtime_dir).is_ok() {
+        let _ = fs::write(
+            durable_session_hint_path(state, workspace_id),
+            session_id.trim(),
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(super) fn persist_durable_session_hint(
+    _state: &AppState,
+    _workspace_id: &str,
+    _session_id: &str,
+) {
+}
+
+#[cfg(target_os = "windows")]
 fn spawn_durable_project_pi(
     state: &AppState,
     workspace_id: &str,
@@ -46,7 +73,14 @@ fn spawn_durable_project_pi(
         .lock()
         .iter()
         .find(|workspace| workspace.id == workspace_id)
-        .and_then(|workspace| workspace.session_id.clone());
+        .and_then(|workspace| workspace.session_id.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            fs::read_to_string(durable_session_hint_path(state, workspace_id))
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        });
     let runtime_dir = durable_pi_runtime_dir(state, workspace_id);
     fs::create_dir_all(&runtime_dir)
         .map_err(|error| format!("创建 {} 失败: {error}", runtime_dir.display()))?;
@@ -193,6 +227,7 @@ fn cleanup_durable_project_pi_artifacts(state: &AppState, workspace_id: &str) {
     let _ = fs::remove_file(runtime_dir.join("stdout.log"));
     let _ = fs::remove_file(runtime_dir.join("stderr.log"));
     let _ = fs::remove_file(runtime_dir.join("wrapper.pid"));
+    let _ = fs::remove_file(runtime_dir.join("session.id"));
     let _ = fs::remove_dir(&runtime_dir);
 }
 
@@ -466,8 +501,27 @@ pub async fn start_workspace_session_inner(
         return Err("工作区目录不存在".to_string());
     }
 
-    // Stop existing process if any
-    let _ = stop_workspace_session_inner(app.clone(), state.clone(), workspace_id.clone()).await;
+    // Stop only a genuinely live existing process. `restart_workspace_session_inner`
+    // deliberately restores the previous durable session ID before calling start;
+    // an unconditional second stop here used to erase that resume hint and forced
+    // every restart to register a brand-new Broker session.
+    let existing_pid = state
+        .running_workspace_pids
+        .lock()
+        .get(&workspace_id)
+        .copied()
+        .or_else(|| {
+            state
+                .workspaces
+                .lock()
+                .iter()
+                .find(|workspace| workspace.id == workspace_id)
+                .and_then(|workspace| workspace.pid)
+        });
+    if existing_pid.map(is_process_running).unwrap_or(false) {
+        let _ =
+            stop_workspace_session_inner(app.clone(), state.clone(), workspace_id.clone()).await;
+    }
 
     let start_msg = if locale.starts_with("en") {
         format!(
@@ -507,7 +561,9 @@ pub async fn start_workspace_session_inner(
             let mut list = state.workspaces.lock();
             if let Some(w) = list.iter_mut().find(|w| w.id == workspace_id) {
                 w.pid = Some(pid);
-                w.session_id = None;
+                // Keep the previous durable session ID as a resume hint until the
+                // Broker confirms the newly launched process. Fresh workspaces
+                // naturally keep this as None.
                 w.binding_count = 0;
                 w.status = "starting".to_string();
                 w.last_started_at = Some(local_now_rfc3339());
@@ -1026,10 +1082,14 @@ pub fn generate_chatgpt_prompt(
 I want to work on project:
 {}
 
-Call init with the specified sessionId:
-init({{ sessionId: "{}" }})
+The remembered sessionId `{}` is only a hint, not durable identity.
+1. Call sessions once.
+2. Find exactly one live Pi session whose normalized cwd equals the project path above.
+3. If the returned current binding already equals that sessionId, keep it; otherwise call init with the live matching sessionId.
+4. Never fall back to a session with another cwd.
+5. Output current cwd, Git branch, and status.
 
-Then output current cwd, Git branch, and status."#,
+If no exact match exists, stop and report the current sessions status."#,
                     path, sid
                 )
             } else {
@@ -1039,10 +1099,14 @@ Then output current cwd, Git branch, and status."#,
 我要操作项目：
 {}
 
-使用指定的 sessionId 调用 init：
-init({{ sessionId: "{}" }})
+记忆中的 sessionId `{}` 只作为 hint，不是持久身份。
+1. 先调用一次 sessions。
+2. 按 normalized cwd 精确找到 cwd 等于上面项目路径的唯一 live Pi Session。
+3. 若 sessions 返回的当前 binding 已经等于该 live sessionId，则保持；否则用当前 live sessionId 调用 init。
+4. 绝不能 fallback 到其他 cwd 的 Session。
+5. 输出当前 cwd、Git branch 和状态。
 
-随后输出当前 cwd、Git 分支及状态。"#,
+若不存在唯一 exact-cwd 匹配，停止并告诉我当前 sessions 状态。"#,
                     path, sid
                 )
             };
@@ -1090,7 +1154,7 @@ If the project does not exist, has multiple matches, or Pi is not online, stop a
 
 #[cfg(test)]
 mod tests {
-    use super::matching_broker_session;
+    use super::{generate_chatgpt_prompt, matching_broker_session};
     use crate::models::WorkspaceItem;
     use crate::utils::chappie_broker::BrokerSession;
 
@@ -1121,6 +1185,19 @@ mod tests {
             status: "idle".to_string(),
             binding_count: 2,
         }
+    }
+
+    #[test]
+    fn generated_prompt_treats_session_id_as_hint_and_resolves_by_cwd() {
+        let prompt = generate_chatgpt_prompt(
+            r"D:\point_tracking".to_string(),
+            Some("stale-session".to_string()),
+            Some("en".to_string()),
+        );
+        assert!(prompt.contains("only a hint"));
+        assert!(prompt.contains("Call sessions once"));
+        assert!(prompt.contains("normalized cwd"));
+        assert!(!prompt.contains("Call init with the specified sessionId"));
     }
 
     #[test]

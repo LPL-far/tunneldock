@@ -201,7 +201,11 @@ Project Room 中 `enabled=true && keep_session_alive=true` 的工作区采用不
 - 新 TunnelDock 进程通过 `wrapper.pid` + Broker cwd/session 重新 adopt 原 session，保持同一 Session ID；
 - 只有显式 Stop/Restart Project Room Session 时才终止 wrapper + Pi 子树并清理 runtime 文件。
 
-因此网页 ChatGPT 绑定的是一个跨 TunnelDock 生命周期稳定存在的 Project Room Session，而不是某次 Tauri 进程实例的临时子进程。
+因此网页 ChatGPT 不再把某个 sessionId 当成项目身份。Project Room 的稳定身份是 `project_id + workspace_id + exact cwd`；`sessionId` 只是当前 Pi runtime instance。TunnelDock 把当前映射写入 `.tunneldock/session_binding.json` 和 `web_status.session_binding`。网页端每个 user turn 第一次 Pi 调用前只执行一次 `PI.sessions` exact-cwd resolver；若当前 binding 已匹配则零切换，只有 session rotate 时才重新 `PI.init`。若 Pi 调用出现 session missing/disconnected/unavailable，则 resolver 重新执行并只重试该调用一次。
+
+Durable Pi 同时在 `runtime/project-pi/<workspace_id>/session.id` 保存最后确认的 sessionId。正常 restart/crash recovery 会通过 `--session-id` 优先恢复原 ID；即使恢复失败并产生新 runtime ID，网页 resolver 仍按 cwd 自动 rebind，因此 Project Room 逻辑身份不变。
+
+验收：先用独立临时 Pi RPC 证明 `--session-id` 会按指定 UUID 原样注册 Broker；随后真实杀掉 3D Project Room host PID `39976`，TunnelDock supervisor 拉起新 host PID `65364`，Broker sessionId 仍保持 `01a0fc1c-6fbb-755f-ab6c-041bf8a63118`，workspace 最终重新回到 `ready`。这验证了“进程实例可替换、Project Room session 身份保持”的完整恢复路径。
 
 #### Project Room 网页信息流与断流恢复
 Project Room 的逻辑任务状态与浏览器单次 response stream 分离：

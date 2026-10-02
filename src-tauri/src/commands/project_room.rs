@@ -45,6 +45,7 @@ const BRIDGE_DIR: &str = ".tunneldock";
 const BRIDGE_FILE: &str = "project_room.json";
 const WEB_CONTEXT_FILE: &str = "web_context.json";
 const WEB_STATUS_FILE: &str = "web_status.json";
+const SESSION_BINDING_FILE: &str = "session_binding.json";
 const CONSTITUTION_FILE: &str = "CONSTITUTION.md";
 const INBOX_DIR: &str = "inbox";
 const INBOX_PROTOCOL_FILE: &str = "INBOX_PROTOCOL.md";
@@ -89,6 +90,30 @@ use telemetry::{
 
 fn projects_root(state: &AppState) -> PathBuf {
     state.app_data_dir.join("projects")
+}
+
+fn project_session_binding(
+    config: &ProjectRoomConfig,
+    current_session_id: Option<&str>,
+) -> serde_json::Value {
+    let workspace_id = config.workspace_id.as_deref().unwrap_or("unbound");
+    serde_json::json!({
+        "version": 1,
+        "logical_id": format!(
+            "project:{}|workspace:{}|cwd:{}",
+            config.id,
+            workspace_id,
+            config.local_root.replace('\\', "/").to_ascii_lowercase()
+        ),
+        "project_id": config.id,
+        "workspace_id": config.workspace_id,
+        "cwd": config.local_root,
+        "current_session_id": current_session_id,
+        "session_id_is_ephemeral": true,
+        "resolver": "PI.sessions -> exact normalized cwd match -> if returned binding differs, PI.init(current sessionId)",
+        "resolve_before_each_web_turn": true,
+        "retry_on_session_error": true
+    })
 }
 
 fn project_dir(state: &AppState, project_id: &str) -> Result<PathBuf, String> {
@@ -743,6 +768,13 @@ async fn reconcile_project_sessions_once(
             .iter()
             .find(|session| session.cwd.replace('\\', "/").to_ascii_lowercase() == expected_cwd)
         {
+            let binding_path = PathBuf::from(&config.local_root)
+                .join(BRIDGE_DIR)
+                .join(SESSION_BINDING_FILE);
+            let _ = write_json_if_changed(
+                &binding_path,
+                &project_session_binding(&config, Some(&session.id)),
+            );
             let mut should_migrate_legacy_host = false;
             {
                 let mut workspaces = state.workspaces.lock();
@@ -774,6 +806,11 @@ async fn reconcile_project_sessions_once(
 
                     workspace.status = next_status.to_string();
                     workspace.session_id = Some(session.id.clone());
+                    crate::commands::workspace::persist_durable_session_hint(
+                        &state,
+                        &workspace_id,
+                        &session.id,
+                    );
                     workspace.binding_count = session.binding_count;
                     workspace.error_message = None;
                     if let Some(pid) = durable_pid {
@@ -804,6 +841,11 @@ async fn reconcile_project_sessions_once(
             }
             continue;
         }
+
+        let binding_path = PathBuf::from(&config.local_root)
+            .join(BRIDGE_DIR)
+            .join(SESSION_BINDING_FILE);
+        let _ = write_json_if_changed(&binding_path, &project_session_binding(&config, None));
 
         let live_pid = state
             .running_workspace_pids
@@ -1207,7 +1249,7 @@ Hard isolation rule:
 - Do not import memory, tasks, conclusions, or code state from another Project Room.
 
 At the beginning of this web conversation:
-1. Bind to the local Pi/Chappie session whose cwd is exactly '{local}'. Use sessions -> cwd -> sessionId -> init; never choose by an old remembered session ID.
+1. Session binding is logical, not fixed to a sessionId. Before the first Pi call of EVERY user turn, call PI.sessions once and find the live session whose normalized cwd exactly equals '{local}'. Compare that ID with the `binding` returned by PI.sessions; call PI.init only when they differ. Treat any remembered sessionId only as a cache. If a Pi call fails with session missing/disconnected/unavailable, resolve by exact cwd again and retry that failed Pi call once. Never fall back to another cwd/project.
 2. Read '{local}\.tunneldock\CONSTITUTION.md'.
 3. Read '{local}\.tunneldock\web_status.json' first, then '{local}\.tunneldock\INBOX_PROTOCOL.md'. If `web_status.actions` is non-empty, process those actions in priority order before creating more work. Read `web_context.json` once when you need current task/discussion detail, and reread it only when `web_status.json.state_token` changes or the review gate opens. Read full `project_room.json` only for details omitted from the compact web context.
 4. Read the default durable memory set:
@@ -1263,7 +1305,7 @@ TunnelDock workspace ID：{workspace}
 - 不得自动引用其他 Project Room 的记忆、任务、结论或代码状态。
 
 这个网页对话开始时必须：
-1. 通过 Pi/Chappie 的 sessions -> cwd -> sessionId -> init，绑定 cwd 严格等于 '{local}' 的本地 Session；不要使用记忆中的旧 sessionId 猜测绑定。
+1. Session 绑定使用逻辑身份而不是固定 sessionId。每个 user turn 第一次 Pi 调用前，只调用一次 PI.sessions，找到 normalized cwd 严格等于 '{local}' 的 live session，并与 PI.sessions 返回的 `binding` 比较；仅当二者不同才 PI.init 当前 sessionId。记忆中的 sessionId 只能作为缓存。若 Pi 调用出现 session missing / disconnected / unavailable，必须重新按 exact cwd resolve，再重试该次 Pi 调用一次；绝不能 fallback 到其他项目/cwd。
 2. 阅读 '{local}\.tunneldock\CONSTITUTION.md'。
 3. 先读取 '{local}\.tunneldock\web_status.json'，再读取 '{local}\.tunneldock\INBOX_PROTOCOL.md'。若 `web_status.actions` 非空，必须先按 priority 处理这些 action，再创建新任务。只有需要当前任务/讨论细节时才读取一次 `web_context.json`；仅当 `web_status.json.state_token` 变化或 review gate 打开时才重新读取。只有轻量上下文确实不足时才读取完整 `project_room.json`。
 4. 默认先读取持久化记忆中的：
@@ -1440,8 +1482,8 @@ mod tests {
     use super::{
         discover_nested_git_roots, ensure_project_memory, load_project_memory,
         parse_antigravity_quota_summary, parse_codex_app_server_rate_limits,
-        parse_codex_rate_limit, scopes_conflict, stale_name_reason, ProjectRemote,
-        ProjectRoomConfig,
+        parse_codex_rate_limit, project_session_binding, scopes_conflict, stale_name_reason,
+        ProjectRemote, ProjectRoomConfig,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1475,6 +1517,20 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
         }
+    }
+
+    #[test]
+    fn project_session_binding_identity_does_not_depend_on_runtime_session_id() {
+        let root = temp_root("session-binding");
+        let mut config = test_config(&root);
+        config.workspace_id = Some("ws-test".to_string());
+
+        let first = project_session_binding(&config, Some("session-a"));
+        let second = project_session_binding(&config, Some("session-b"));
+        assert_eq!(first["logical_id"], second["logical_id"]);
+        assert_eq!(first["current_session_id"], "session-a");
+        assert_eq!(second["current_session_id"], "session-b");
+        assert_eq!(first["session_id_is_ephemeral"], true);
     }
 
     #[test]

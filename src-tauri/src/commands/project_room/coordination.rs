@@ -25,17 +25,24 @@ This project is optimized for top-conference research, not product feature accum
 - Never paste full tool output, full worker handoffs, long code excerpts, or complete experiment logs into the web conversation. Put detail in project files/artifacts and cite paths. Keep individual Pi tool results preferably <= 8 KiB: grep/find first, then read narrow line/offset ranges. Do not batch multiple potentially-50KiB read/bash calls into one web turn; write large diagnostics to a file and inspect only decisive slices.
 - The consultation barrier is durable Project Room state, not a reason to keep one browser response stream open. Poll `.tunneldock/web_status.json` at most 5 times / about 20 seconds in one web turn. If its `state_token` is unchanged and the gate remains closed, end with a compact checkpoint and resume on the next user turn. Do not reread `web_context.json` or logs while the token is unchanged.
 - For multi-agent consultation, never synthesize while `ready_for_review=false`. `review_only` consultation finalizes after `consult.reviewed`; `durable` consultation additionally requires canonical memory commit and cleanup. Once ready, read `web_context.json` and every successful worker handoff in full, then report only consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
-- After reading all settled worker evidence and completing its own review, ChatGPT must emit `consult.reviewed`, update canonical project memory and emit `memory.commit`, then perform cleanup/integration and emit `cleanup.commit`. A consultation is final only when the barrier state is `finalized`. If a worker failed/blocked, report it as missing evidence rather than inventing consensus.
+- After reading all settled worker evidence and completing its own review, ChatGPT must emit `consult.reviewed`. `review_only` consultation finalizes there. `durable` consultation must then update canonical project memory / emit `memory.commit`, perform cleanup/integration / emit `cleanup.commit`, and reach `finalized`. If a worker failed/blocked, report it as missing evidence rather than inventing consensus.
 - Prefer one focused consultation round over open-ended agent-to-agent chatting. Start another round only when a concrete unresolved question remains.
 - Throughput rule: clear `web_status.actions` before scheduling more work. A worker handoff is not task completion; non-consultation work reaches `completed` only after ChatGPT emits `task.review=accept` based on a real completed run + handoff + decisive verification.
 
 ## Review and decision rules
 - Gemini modifications to core model/training/data code require Codex review before acceptance.
 - Important Codex algorithm changes require ChatGPT review for research intent and methodological consistency.
-- ChatGPT Web must personally inspect the decisive diff/source before a human-facing code or method decision. Worker conclusions are inputs, not the final review. A consultation is not finalized until all requested workers are terminal, all successful handoffs were read in full, `consult.reviewed` was accepted, canonical memory was updated and committed, and cleanup/integration was verified by `cleanup.commit`.
+- ChatGPT Web must personally inspect the decisive diff/source before a human-facing code or method decision. Worker conclusions are inputs, not the final review. A `review_only` consultation finalizes after all requested workers are terminal, all successful handoffs were read, and `consult.reviewed` is accepted. A `durable` consultation additionally requires canonical memory commit and cleanup/integration verification.
 - Keep the human-facing review compact: 2-4 decisive code findings, agent consensus/disagreement, at most 2-3 options with tradeoffs, and the exact question requiring the researcher's decision.
 - Agents may discuss and challenge each other. Disagreement should be preserved in Project Room discussion until a decision is made.
 - The human researcher remains the final decision maker. Only after the human explicitly decides should ChatGPT persist a `decision.record` to DECISIONS.md.
+
+## Session binding and recovery
+- A Project Room is identified by stable logical identity (`project_id + workspace_id + exact cwd`), never by a remembered Pi sessionId. `sessionId` is only the current runtime instance.
+- Before the first Pi tool call in every web turn, call `PI.sessions` once and resolve the live session by exact normalized cwd. Compare it with the `binding` returned by `PI.sessions`; call `PI.init` only when they differ. If already matched, the resolver is a read-only no-op.
+- If a Pi tool call fails because the session is missing, disconnected, unavailable, or was rotated, resolve by cwd again, re-init, and retry that failed Pi call once. Do not retry arbitrary task errors.
+- If no live session for the exact cwd exists, do not fall back to another project or stale session ID; report the Project Room runtime as temporarily unavailable and let TunnelDock restore it.
+- `.tunneldock/session_binding.json` / `web_status.session_binding` record the current runtime binding. A change to this binding changes `state_token`.
 
 ## Project isolation
 - Do not import task state, memory, or decisions from another Project Room unless the user explicitly requests a cross-project handoff.
@@ -483,6 +490,8 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
     // The bridge is operational coordination state only. Canonical research memory
     // remains exclusively in .project_memory/*.md so agents never mistake a copied
     // JSON snapshot for an authoritative second memory source.
+    let session_binding = read_json::<serde_json::Value>(&bridge_dir.join(SESSION_BINDING_FILE))
+        .unwrap_or_else(|_| project_session_binding(&snapshot.config, None));
     let memory_dir = project_memory_dir(&snapshot.config);
     let tasks = snapshot
         .tasks
@@ -569,6 +578,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
     let consultations = consultation_barriers(&snapshot.tasks, &snapshot.runs);
     let bridge = serde_json::json!({
         "config": &snapshot.config,
+        "session_binding": &session_binding,
         "memory": {
             "updated_at": &snapshot.memory.updated_at,
             "index": memory_dir.join(MEMORY_INDEX_FILE),
@@ -875,6 +885,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         .collect::<Vec<_>>();
     let status_core = serde_json::json!({
         "project_id": &snapshot.config.id,
+        "session_binding": &session_binding,
         "memory_updated_at": &snapshot.memory.updated_at,
         "tasks": &status_tasks,
         "consultations": &status_consultations,
@@ -886,6 +897,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
     let state_token = stable_state_token(&status_core);
     let web_status = serde_json::json!({
         "project_id": &snapshot.config.id,
+        "session_binding": &session_binding,
         "state_token": state_token,
         "has_pending_work": !status_tasks.is_empty() || !status_consultations.is_empty() || !web_actions.is_empty(),
         "actions": web_actions,
@@ -900,6 +912,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             "max_inline_wait_seconds": 20,
             "max_poll_cycles": 5,
             "max_actions_per_turn": 4,
+            "session_resolver": "Before the first Pi call of every web turn: call PI.sessions once, find the live session whose normalized cwd exactly matches session_binding.cwd, compare it with the returned current binding, and call PI.init only when they differ. Treat remembered sessionId as a cache only. On missing/disconnected/session-unavailable errors, resolve again and retry the failed Pi call once.",
             "unchanged_state": "If state_token is unchanged, do not reread web_context.json or full logs.",
             "timeout_action": "End the current web stream with a compact checkpoint and no substantive conclusion. On the next user turn, reread web_status.json and continue from state_token. Logical consultation barriers remain persisted on disk."
         }
@@ -907,6 +920,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
 
     let web_context = serde_json::json!({
         "config": &snapshot.config,
+        "session_binding": &session_binding,
         "memory": {
             "updated_at": &snapshot.memory.updated_at,
             "index": memory_dir.join(MEMORY_INDEX_FILE),
@@ -941,6 +955,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "review_gate": &review_gate,
         "detail_sources": {
             "status": bridge_dir.join(WEB_STATUS_FILE),
+            "session_binding": bridge_dir.join(SESSION_BINDING_FILE),
             "full_snapshot": bridge_dir.join(BRIDGE_FILE),
             "inbox_protocol": bridge_dir.join(INBOX_PROTOCOL_FILE),
             "run_root": bridge_dir.join(RUNS_DIR),
