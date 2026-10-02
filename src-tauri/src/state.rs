@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 
 use crate::audit::{redact_audit_json, redact_audit_text};
 use crate::models::{McpCallRecord, TunnelSettings, WorkspaceItem};
-use crate::utils::cmd::kill_process_tree;
+use crate::utils::cmd::{is_process_running, kill_process_tree};
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path};
 use crate::utils::time::normalize_timestamp_to_local;
 
@@ -38,12 +38,27 @@ impl AppState {
         let app_data_dir = Self::resolve_app_data_dir();
 
         let settings = Self::load_settings(&app_data_dir);
-        let workspaces = Self::load_workspaces(&app_data_dir);
+        let mut workspaces = Self::load_workspaces(&app_data_dir);
         let history = Self::load_history(&app_data_dir);
+        let durable_workspace_ids = Self::durable_project_workspace_ids_from_dir(&app_data_dir);
+        let mut running_workspace_pids = HashMap::new();
+        for workspace in &mut workspaces {
+            if !durable_workspace_ids.contains(&workspace.id) {
+                continue;
+            }
+            let pid = workspace
+                .pid
+                .filter(|pid| is_process_running(*pid))
+                .or_else(|| Self::durable_workspace_pid_from_dir(&app_data_dir, &workspace.id));
+            if let Some(pid) = pid {
+                workspace.pid = Some(pid);
+                running_workspace_pids.insert(workspace.id.clone(), pid);
+            }
+        }
 
         Self {
             workspaces: Arc::new(Mutex::new(workspaces)),
-            running_workspace_pids: Arc::new(Mutex::new(HashMap::new())),
+            running_workspace_pids: Arc::new(Mutex::new(running_workspace_pids)),
             running_workspace_stdins: Arc::new(Mutex::new(HashMap::new())),
             running_agent_pids: Arc::new(Mutex::new(HashMap::new())),
             otunnel_pid: Arc::new(Mutex::new(None)),
@@ -93,6 +108,68 @@ impl AppState {
         }
     }
 
+    fn durable_project_workspace_ids_from_dir(app_data_dir: &Path) -> HashSet<String> {
+        let projects_root = app_data_dir.join("projects");
+        let registry_path = projects_root.join("registry.json");
+        let project_ids = fs::read_to_string(&registry_path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+            .unwrap_or_default();
+        let mut workspace_ids = HashSet::new();
+        for project_id in project_ids {
+            let config_path = projects_root.join(project_id).join("project.json");
+            let Some(value) = fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            else {
+                continue;
+            };
+            let enabled = value
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            let keep_alive = value
+                .get("keep_session_alive")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let workspace_id = value
+                .get("workspace_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if enabled && keep_alive {
+                if let Some(workspace_id) = workspace_id {
+                    workspace_ids.insert(workspace_id.to_string());
+                }
+            }
+        }
+        workspace_ids
+    }
+
+    fn durable_workspace_pid_from_dir(app_data_dir: &Path, workspace_id: &str) -> Option<u32> {
+        let path = app_data_dir
+            .join("runtime")
+            .join("project-pi")
+            .join(workspace_id)
+            .join("wrapper.pid");
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+            .filter(|pid| is_process_running(*pid))
+    }
+
+    pub fn durable_project_workspace_ids(&self) -> HashSet<String> {
+        Self::durable_project_workspace_ids_from_dir(&self.app_data_dir)
+    }
+
+    pub fn durable_workspace_pid(&self, workspace_id: &str) -> Option<u32> {
+        Self::durable_workspace_pid_from_dir(&self.app_data_dir, workspace_id)
+    }
+
+    pub fn workspace_is_durable_project(&self, workspace_id: &str) -> bool {
+        self.durable_project_workspace_ids().contains(workspace_id)
+    }
+
     pub fn cleanup_in_progress(&self) -> bool {
         self.cleanup_started.load(Ordering::Acquire)
     }
@@ -105,8 +182,14 @@ impl AppState {
             return;
         }
 
-        // 1. Close RPC stdin first so well-behaved Pi children can observe EOF.
-        self.running_workspace_stdins.lock().clear();
+        let durable_workspace_ids = self.durable_project_workspace_ids();
+
+        // 1. Close RPC stdin only for UI-scoped workspaces. Durable Project Room
+        // Pi workers own their stdin in an external WMI wrapper and intentionally
+        // survive TunnelDock/Tauri restarts.
+        self.running_workspace_stdins
+            .lock()
+            .retain(|workspace_id, _| durable_workspace_ids.contains(workspace_id));
 
         // 2. Terminate only the otunnel process actually spawned by this
         // application. A daemon merely discovered by PID may be an independent
@@ -124,15 +207,11 @@ impl AppState {
             self.forget_otunnel_runtime();
         }
 
-        let pids: Vec<u32> = self
-            .running_workspace_pids
-            .lock()
-            .values()
-            .copied()
-            .collect();
-        self.running_workspace_pids.lock().clear();
-        for pid in pids {
-            let _ = kill_process_tree(pid);
+        let workspace_pids = self.running_workspace_pids.lock().clone();
+        for (workspace_id, pid) in workspace_pids {
+            if !durable_workspace_ids.contains(&workspace_id) {
+                let _ = kill_process_tree(pid);
+            }
         }
 
         // Project Room agent workers are durable task processes, not UI-scoped
@@ -151,6 +230,11 @@ impl AppState {
         // 3. Persist a clean stopped state for the next launch.
         let mut list = self.workspaces.lock();
         for w in list.iter_mut() {
+            if durable_workspace_ids.contains(&w.id)
+                && w.pid.map(is_process_running).unwrap_or(false)
+            {
+                continue;
+            }
             w.status = "stopped".to_string();
             w.pid = None;
             w.session_id = None;
@@ -398,6 +482,62 @@ mod tests {
             );
             fs::remove_dir_all(base_dir).expect("test data should be removed");
         }
+    }
+
+    #[test]
+    fn detects_only_enabled_keep_alive_project_workspaces() {
+        let data_dir = temporary_data_root("durable-project-workspaces");
+        let projects = data_dir.join("projects");
+        fs::create_dir_all(projects.join("keep")).expect("keep project dir");
+        fs::create_dir_all(projects.join("disabled")).expect("disabled project dir");
+        fs::create_dir_all(projects.join("no_keep")).expect("no-keep project dir");
+        fs::write(
+            projects.join("registry.json"),
+            r#"["keep","disabled","no_keep"]"#,
+        )
+        .expect("registry");
+        fs::write(
+            projects.join("keep").join("project.json"),
+            r#"{"enabled":true,"keep_session_alive":true,"workspace_id":"ws_keep"}"#,
+        )
+        .expect("keep config");
+        fs::write(
+            projects.join("disabled").join("project.json"),
+            r#"{"enabled":false,"keep_session_alive":true,"workspace_id":"ws_disabled"}"#,
+        )
+        .expect("disabled config");
+        fs::write(
+            projects.join("no_keep").join("project.json"),
+            r#"{"enabled":true,"keep_session_alive":false,"workspace_id":"ws_no_keep"}"#,
+        )
+        .expect("no-keep config");
+
+        let ids = AppState::durable_project_workspace_ids_from_dir(&data_dir);
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains("ws_keep"));
+        fs::remove_dir_all(data_dir).expect("cleanup");
+    }
+
+    #[test]
+    fn restores_live_durable_workspace_pid_from_pidfile() {
+        let data_dir = temporary_data_root("durable-project-pid");
+        let workspace_id = "ws_pid";
+        let runtime_dir = data_dir
+            .join("runtime")
+            .join("project-pi")
+            .join(workspace_id);
+        fs::create_dir_all(&runtime_dir).expect("runtime dir");
+        fs::write(
+            runtime_dir.join("wrapper.pid"),
+            std::process::id().to_string(),
+        )
+        .expect("pid file");
+
+        assert_eq!(
+            AppState::durable_workspace_pid_from_dir(&data_dir, workspace_id),
+            Some(std::process::id())
+        );
+        fs::remove_dir_all(data_dir).expect("cleanup");
     }
 
     #[test]

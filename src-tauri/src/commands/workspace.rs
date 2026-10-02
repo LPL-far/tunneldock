@@ -2,9 +2,12 @@ use crate::audit::{parse_rpc_audit_event, RpcAuditEvent};
 use crate::models::{McpCallRecord, WorkspaceItem};
 use crate::state::{AppState, HISTORY_RECORD_LIMIT};
 use crate::utils::chappie_broker;
-use crate::utils::cmd::{execute_cmd, is_process_running, kill_process_tree};
+use crate::utils::cmd::{
+    execute_cmd, execute_powershell, find_executable, is_process_running, kill_process_tree,
+};
 use crate::utils::time::local_now_rfc3339;
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -15,6 +18,78 @@ use tauri::{AppHandle, Emitter, State};
 use std::os::windows::process::CommandExt;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+fn powershell_single_quote(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+#[cfg(target_os = "windows")]
+fn durable_pi_runtime_dir(state: &AppState, workspace_id: &str) -> PathBuf {
+    state
+        .app_data_dir
+        .join("runtime")
+        .join("project-pi")
+        .join(workspace_id)
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_durable_project_pi(
+    state: &AppState,
+    workspace_id: &str,
+    workspace_dir: &Path,
+) -> Result<u32, String> {
+    let pi = find_executable("pi")
+        .ok_or_else(|| "未找到 pi 可执行文件，无法启动 durable Project Room session".to_string())?;
+    let runtime_dir = durable_pi_runtime_dir(state, workspace_id);
+    fs::create_dir_all(&runtime_dir)
+        .map_err(|error| format!("创建 {} 失败: {error}", runtime_dir.display()))?;
+    let launcher_path = runtime_dir.join("pi_worker.cmd");
+    let stdout_path = runtime_dir.join("stdout.log");
+    let stderr_path = runtime_dir.join("stderr.log");
+    let launcher = format!(
+        "@echo off\r\ncd /d \"{}\"\r\n(echo {{\"id\":\"init\",\"type\":\"get_state\"}} & ping.exe -t 127.0.0.1 >nul) | call \"{}\" --mode rpc --provider chappie --model chatgpt 1>>\"{}\" 2>>\"{}\"\r\nexit /b %ERRORLEVEL%\r\n",
+        workspace_dir.display(),
+        pi,
+        stdout_path.display(),
+        stderr_path.display(),
+    );
+    fs::write(&launcher_path, launcher)
+        .map_err(|error| format!("写入 {} 失败: {error}", launcher_path.display()))?;
+
+    let command_line = format!("cmd.exe /d /s /c \"\"{}\"\"", launcher_path.display());
+    let script = format!(
+        "$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='{}'}}; if($r.ReturnValue -ne 0){{Write-Error ('Win32_Process.Create failed: '+$r.ReturnValue); exit 1}}; [Console]::Out.Write($r.ProcessId)",
+        powershell_single_quote(&command_line)
+    );
+    let output = execute_powershell(&script, None);
+    if !output.success {
+        let detail = if output.stderr.trim().is_empty() {
+            output.stdout.trim().to_string()
+        } else {
+            output.stderr.trim().to_string()
+        };
+        return Err(format!("WMI 启动 durable Project Room Pi 失败: {detail}"));
+    }
+    let pid = output
+        .stdout
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| format!("解析 durable Project Room Pi wrapper PID 失败: {error}"))?;
+    fs::write(runtime_dir.join("wrapper.pid"), pid.to_string())
+        .map_err(|error| format!("写入 durable Project Room Pi PID 失败: {error}"))?;
+    Ok(pid)
+}
+
+#[cfg(target_os = "windows")]
+fn cleanup_durable_project_pi_artifacts(state: &AppState, workspace_id: &str) {
+    let runtime_dir = durable_pi_runtime_dir(state, workspace_id);
+    let _ = fs::remove_file(runtime_dir.join("pi_worker.cmd"));
+    let _ = fs::remove_file(runtime_dir.join("stdout.log"));
+    let _ = fs::remove_file(runtime_dir.join("stderr.log"));
+    let _ = fs::remove_file(runtime_dir.join("wrapper.pid"));
+    let _ = fs::remove_dir(&runtime_dir);
+}
 
 struct PendingToolCall {
     record_id: String,
@@ -302,6 +377,39 @@ pub async fn start_workspace_session_inner(
             "is_error": false,
         }),
     );
+
+    #[cfg(target_os = "windows")]
+    if state.workspace_is_durable_project(&workspace_id) {
+        let pid = spawn_durable_project_pi(&state, &workspace_id, &dir)?;
+        state
+            .running_workspace_pids
+            .lock()
+            .insert(workspace_id.clone(), pid);
+        {
+            let mut list = state.workspaces.lock();
+            if let Some(w) = list.iter_mut().find(|w| w.id == workspace_id) {
+                w.pid = Some(pid);
+                w.session_id = None;
+                w.binding_count = 0;
+                w.status = "starting".to_string();
+                w.last_started_at = Some(local_now_rfc3339());
+                w.error_message = None;
+            }
+        }
+        state.save_workspaces();
+        let _ = app.emit(
+            "workspace-log",
+            serde_json::json!({
+                "workspace_id": &workspace_id,
+                "line": format!(
+                    ">>> Durable Project Room Pi launched via WMI | wrapper PID: {}",
+                    pid
+                ),
+                "is_error": false,
+            }),
+        );
+        return Ok(pid);
+    }
 
     #[cfg(target_os = "windows")]
     let mut cmd = {
@@ -684,12 +792,29 @@ pub async fn stop_workspace_session_inner(
     // 1. Close stdin to signal EOF to Pi process
     state.running_workspace_stdins.lock().remove(&workspace_id);
 
-    // 2. Terminate PID process tree
-    let pid_opt = state.running_workspace_pids.lock().remove(&workspace_id);
+    // 2. Terminate PID process tree. After a TunnelDock restart the durable
+    // Project Room wrapper PID may only exist in persisted workspace state, so
+    // fall back to that PID when the in-memory map has not been rehydrated yet.
+    let pid_opt = state
+        .running_workspace_pids
+        .lock()
+        .remove(&workspace_id)
+        .or_else(|| {
+            state
+                .workspaces
+                .lock()
+                .iter()
+                .find(|workspace| workspace.id == workspace_id)
+                .and_then(|workspace| workspace.pid)
+        });
     let mut stopped = false;
 
     if let Some(pid) = pid_opt {
         stopped = kill_process_tree(pid);
+    }
+    #[cfg(target_os = "windows")]
+    if state.workspace_is_durable_project(&workspace_id) {
+        cleanup_durable_project_pi_artifacts(&state, &workspace_id);
     }
 
     {

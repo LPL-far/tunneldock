@@ -742,6 +742,17 @@ async fn reconcile_project_sessions_once(
                 workspace.session_id = Some(session.id.clone());
                 workspace.binding_count = session.binding_count;
                 workspace.error_message = None;
+                let durable_pid = workspace
+                    .pid
+                    .filter(|pid| is_process_running(*pid))
+                    .or_else(|| state.durable_workspace_pid(&workspace_id));
+                if let Some(pid) = durable_pid {
+                    workspace.pid = Some(pid);
+                    state
+                        .running_workspace_pids
+                        .lock()
+                        .insert(workspace_id.clone(), pid);
+                }
                 adopted_any = true;
             }
             continue;

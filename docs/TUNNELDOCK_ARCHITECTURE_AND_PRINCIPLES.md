@@ -187,14 +187,21 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
   让开发者在前端一目了然各项目的代码状态。
 
 #### Session 进程与标准输入管道绑定
-当用户点击「启动 Session」时：
-1. 系统在目标项目路径下启动独立的子进程：
-   ```bash
-   pi --provider chappie --model chatgpt
-   ```
-2. 保持标准输入（`ChildStdin`）句柄，保存在 `AppState::running_workspace_stdins` 哈希映射表中；
-3. 将 PID 保存在 `AppState::running_workspace_pids` 中；
-4. 会话就绪后生成专属 Session ID，供 Chappie Broker 寻址。
+普通工作区在用户点击「启动 Session」时，仍由 TunnelDock 启动 UI-scoped Pi RPC 子进程：
+1. 在目标项目路径运行 `pi --mode rpc --provider chappie --model chatgpt`；
+2. 保持标准输入（`ChildStdin`）句柄，保存在 `AppState::running_workspace_stdins`；
+3. 将 PID 保存到 `AppState::running_workspace_pids`；
+4. 会话就绪后由 Chappie Broker 提供专属 Session ID。
+
+Project Room 中 `enabled=true && keep_session_alive=true` 的工作区采用不同生命周期：
+- Windows 下生成 `runtime/project-pi/<workspace_id>/pi_worker.cmd`，由 WMI/CIM `Win32_Process.Create` 启动独立 wrapper；
+- wrapper 先向 Pi RPC stdin 写入一次 `get_state`，随后用无输出的长期 `ping -t` producer 保持 stdin 管道打开；
+- wrapper PID 写入 `wrapper.pid` 并同时保存在 workspace 状态中；
+- wrapper/Pi 进程树属于 WMI 服务而不是 TunnelDock/Tauri，因此开发热重载、窗口关闭或应用 restart 不会杀掉 Project Room Pi；
+- 新 TunnelDock 进程通过 `wrapper.pid` + Broker cwd/session 重新 adopt 原 session，保持同一 Session ID；
+- 只有显式 Stop/Restart Project Room Session 时才终止 wrapper + Pi 子树并清理 runtime 文件。
+
+因此网页 ChatGPT 绑定的是一个跨 TunnelDock 生命周期稳定存在的 Project Room Session，而不是某次 Tauri 进程实例的临时子进程。
 
 #### 自动化绑定提示词生成（Prompt Generation）
 为了减少用户在网页端的繁琐配置，TunnelDock 支持一键生成与 ChatGPT 绑定的系统级指令提示词：
