@@ -659,7 +659,7 @@ pub(super) fn agent_runtimes() -> Vec<AgentRuntimeInfo> {
                 .as_ref()
                 .and_then(|path| command_version(path, &["--version"])),
             dispatch_mode: "background_fork_controller".to_string(),
-            notes: "Codex 保留用户原 Desktop 长期对话作为 human/canonical thread；TunnelDock 首次从它 fork 持久 automation thread，并用独立本地 app-server 在后台执行 turn，因此不依赖 Desktop 当前打开哪条对话。"
+            notes: "Codex 保留用户原 Desktop 长期对话作为 human/canonical thread；TunnelDock 首次从它 fork 持久 automation thread，并用独立本地 app-server 在后台执行 turn。这里的 runtime/quota telemetry 不代表任务通信健康；Project Room 通信健康以 transports 的最近 E2E 结果为准。"
                 .to_string(),
         },
         AgentRuntimeInfo {

@@ -165,6 +165,18 @@ pub struct MemoryHealth {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentTransportHealth {
+    pub agent_id: String,
+    pub status: String,
+    pub active_run_id: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_failure_at: Option<String>,
+    pub last_error: Option<String>,
+    pub source: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectMemory {
     #[serde(default)]
     pub memory_index: String,
@@ -281,6 +293,9 @@ pub struct ProjectRoomSummary {
     pub codex_automation_thread_id: Option<String>,
     pub codex_status: String,
     pub codex_active_run_id: Option<String>,
+    pub codex_last_success_at: Option<String>,
+    pub codex_last_failure_at: Option<String>,
+    pub codex_last_error: Option<String>,
     pub session_status: String,
     pub session_id: Option<String>,
     pub binding_count: u32,
@@ -329,6 +344,7 @@ pub struct ProjectRoomSnapshot {
     pub memory_health: MemoryHealth,
     pub agents: Vec<ProjectAgentPolicy>,
     pub capacities: Vec<AgentCapacity>,
+    pub transports: Vec<AgentTransportHealth>,
     pub tasks: Vec<ProjectTask>,
     pub experiments: Vec<ProjectExperiment>,
     pub discussion: Vec<ProjectDiscussionMessage>,

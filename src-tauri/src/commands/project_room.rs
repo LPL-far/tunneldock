@@ -40,6 +40,7 @@ const TASKS_FILE: &str = "tasks.json";
 const EXPERIMENTS_FILE: &str = "experiments.json";
 const DISCUSSION_FILE: &str = "discussion.json";
 const RUNS_FILE: &str = "runs.json";
+const TRANSPORT_HEALTH_FILE: &str = "transport_health.json";
 const BRIDGE_DIR: &str = ".tunneldock";
 const BRIDGE_FILE: &str = "project_room.json";
 const WEB_CONTEXT_FILE: &str = "web_context.json";
@@ -61,6 +62,7 @@ mod codex;
 mod coordination;
 mod memory;
 mod telemetry;
+mod transport;
 
 use agent_worker::{
     append_system_message, ensure_dispatch_scope_is_safe, next_id, refresh_run_states_unlocked,
@@ -72,6 +74,10 @@ use memory::{
     refresh_memory_status, save_project_memory,
 };
 use telemetry::{agent_runtimes, current_agent_capacities, find_codex_executable};
+use transport::{
+    load_transport_health_unlocked, record_transport_failure, record_transport_running,
+    record_transport_success,
+};
 
 #[cfg(test)]
 use agent_worker::scopes_conflict;
@@ -411,16 +417,19 @@ fn load_snapshot_unlocked(
     let dir = project_dir(state, project_id)?;
 
     let config = read_json::<ProjectRoomConfig>(&dir.join(CONFIG_FILE))?;
+    let runs = read_json::<Vec<AgentRun>>(&dir.join(RUNS_FILE))?;
+    let transports = load_transport_health_unlocked(state, project_id, &config, &runs)?;
     Ok(ProjectRoomSnapshot {
         memory: load_project_memory(&config)?,
         memory_health: refresh_memory_status(&config)?,
         config,
         agents: read_json(&dir.join(AGENTS_FILE))?,
         capacities: read_json(&dir.join(CAPACITIES_FILE))?,
+        transports,
         tasks: read_json(&dir.join(TASKS_FILE))?,
         experiments: read_json(&dir.join(EXPERIMENTS_FILE))?,
         discussion: read_json(&dir.join(DISCUSSION_FILE))?,
-        runs: read_json(&dir.join(RUNS_FILE))?,
+        runs,
     })
 }
 
@@ -557,7 +566,7 @@ pub(super) fn dispatch_project_task_unlocked(
                 )
             })?;
         let automation_name = format!("[TunnelDock] {}", snapshot.config.name);
-        let dispatch = codex::start_background_turn(
+        let dispatch = match codex::start_background_turn(
             &executable,
             source_thread_id,
             snapshot.config.codex_automation_thread_id.as_deref(),
@@ -566,7 +575,14 @@ pub(super) fn dispatch_project_task_unlocked(
             task.kind == "consultation",
             &log_path,
             &error_path,
-        )?;
+        ) {
+            Ok(dispatch) => dispatch,
+            Err(error) => {
+                let _ =
+                    record_transport_failure(state, project_id, "codex", None, &error, "dispatch");
+                return Err(error);
+            }
+        };
         if snapshot.config.codex_automation_thread_id.as_deref() != Some(&dispatch.thread_id) {
             snapshot.config.codex_automation_thread_id = Some(dispatch.thread_id.clone());
             snapshot.config.updated_at = local_now_rfc3339();
@@ -577,6 +593,7 @@ pub(super) fn dispatch_project_task_unlocked(
             .running_agent_pids
             .lock()
             .insert(run_id.clone(), dispatch.pid);
+        let _ = record_transport_running(state, project_id, "codex", &run_id);
         (
             Some(dispatch.pid),
             Some(dispatch.thread_id),
@@ -813,19 +830,10 @@ pub fn list_project_rooms(
                     .find(|workspace| workspace.id == workspace_id)
                     .cloned()
             });
-        let codex_active_run = snapshot
-            .runs
+        let codex_transport = snapshot
+            .transports
             .iter()
-            .find(|run| run.agent_id == "codex" && run.status == "running");
-        let codex_status = if snapshot.config.codex_thread_id.is_none() {
-            "unbound"
-        } else if codex_active_run.is_some() {
-            "running"
-        } else if snapshot.config.codex_automation_thread_id.is_some() {
-            "idle"
-        } else {
-            "ready"
-        };
+            .find(|health| health.agent_id == "codex");
         summaries.push(ProjectRoomSummary {
             id: snapshot.config.id.clone(),
             name: snapshot.config.name.clone(),
@@ -834,8 +842,15 @@ pub fn list_project_rooms(
             workspace_id: snapshot.config.workspace_id.clone(),
             codex_thread_id: snapshot.config.codex_thread_id.clone(),
             codex_automation_thread_id: snapshot.config.codex_automation_thread_id.clone(),
-            codex_status: codex_status.to_string(),
-            codex_active_run_id: codex_active_run.map(|run| run.id.clone()),
+            codex_status: codex_transport
+                .map(|health| health.status.clone())
+                .unwrap_or_else(|| "untested".to_string()),
+            codex_active_run_id: codex_transport.and_then(|health| health.active_run_id.clone()),
+            codex_last_success_at: codex_transport
+                .and_then(|health| health.last_success_at.clone()),
+            codex_last_failure_at: codex_transport
+                .and_then(|health| health.last_failure_at.clone()),
+            codex_last_error: codex_transport.and_then(|health| health.last_error.clone()),
             session_status: workspace_runtime
                 .as_ref()
                 .map(|workspace| workspace.status.clone())

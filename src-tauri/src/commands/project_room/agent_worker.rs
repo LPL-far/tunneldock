@@ -227,6 +227,14 @@ pub(super) fn refresh_run_states_unlocked(
                         run.finished_at = Some(local_now_rfc3339());
                         run.error_message = Some(error.clone());
                         state.running_agent_pids.lock().remove(&run.id);
+                        let _ = record_transport_failure(
+                            state,
+                            project_id,
+                            "codex",
+                            Some(&run.id),
+                            &error,
+                            "background_process_exit",
+                        );
                         if let Some(task) = tasks.iter_mut().find(|task| task.id == run.task_id) {
                             task.status = "blocked".to_string();
                             task.summary = error;
@@ -238,6 +246,13 @@ pub(super) fn refresh_run_states_unlocked(
                 }
                 Ok(codex::CodexRunUpdate::Completed(text)) => {
                     run.error_message = None;
+                    let _ = record_transport_success(
+                        state,
+                        project_id,
+                        "codex",
+                        Some(&run.id),
+                        "project_run",
+                    );
                     fs::write(&output_path, text).map_err(|error| {
                         format!("写入 {} 失败: {}", output_path.display(), error)
                     })?;
@@ -247,6 +262,14 @@ pub(super) fn refresh_run_states_unlocked(
                         let _ = kill_process_tree(pid);
                     }
                     state.running_agent_pids.lock().remove(&run.id);
+                    let _ = record_transport_failure(
+                        state,
+                        project_id,
+                        "codex",
+                        Some(&run.id),
+                        &error,
+                        "poll_terminal_failure",
+                    );
                     run.pid = None;
                     run.status = "failed".to_string();
                     run.finished_at = Some(local_now_rfc3339());
@@ -419,8 +442,25 @@ pub(super) fn refresh_run_states_unlocked(
                 run.status = "failed".to_string();
                 let error_text = fs::read_to_string(&run.error_path)
                     .unwrap_or_else(|_| "Worker exited without a handoff.".to_string());
-                let error = error_text.chars().take(4_000).collect::<String>();
+                let error = if run.agent_id == "codex" {
+                    format!(
+                        "Codex background app-server exited without a handoff. stderr: {}",
+                        error_text.chars().take(3_000).collect::<String>()
+                    )
+                } else {
+                    error_text.chars().take(4_000).collect::<String>()
+                };
                 run.error_message = Some(error.clone());
+                if run.agent_id == "codex" {
+                    let _ = record_transport_failure(
+                        state,
+                        project_id,
+                        "codex",
+                        Some(&run.id),
+                        &error,
+                        "terminal_without_handoff",
+                    );
+                }
                 if let Some(task) = tasks.iter_mut().find(|task| task.id == run.task_id) {
                     task.status = "blocked".to_string();
                     task.summary = error.clone();

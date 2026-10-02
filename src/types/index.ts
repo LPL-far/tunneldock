@@ -116,6 +116,17 @@ export interface MemoryHealth {
   updated_at: string;
 }
 
+export interface AgentTransportHealth {
+  agent_id: string;
+  status: string;
+  active_run_id: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  last_error: string | null;
+  source: string;
+  updated_at: string;
+}
+
 export interface ProjectMemory {
   memory_index: string;
   project_state: string;
@@ -202,6 +213,9 @@ export interface ProjectRoomSummary {
   codex_automation_thread_id: string | null;
   codex_status: string;
   codex_active_run_id: string | null;
+  codex_last_success_at: string | null;
+  codex_last_failure_at: string | null;
+  codex_last_error: string | null;
   session_status: WorkspaceStatus;
   session_id: string | null;
   binding_count: number;
@@ -245,6 +259,7 @@ export interface ProjectRoomSnapshot {
   memory_health: MemoryHealth;
   agents: ProjectAgentPolicy[];
   capacities: AgentCapacity[];
+  transports: AgentTransportHealth[];
   tasks: ProjectTask[];
   experiments: ProjectExperiment[];
   discussion: ProjectDiscussionMessage[];

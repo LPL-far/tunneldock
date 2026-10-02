@@ -70,11 +70,24 @@ The Project Room list shows, for every project at the same time:
 
 This monitor is independent from Codex Desktop's foreground conversation. The Desktop app can remain on any chat while multiple Project Rooms run in the background.
 
+## Transport health semantics
+
+Codex quota/runtime telemetry and task communication health are intentionally separate signals:
+
+- `capacities[].available=true` means the Codex runtime/quota probe is available. It does **not** prove that a Project Room task can currently complete end to end.
+- `transports[]` is the authoritative Project Room communication-health view. It records `unbound / untested / running / healthy / degraded`, the active run (if any), and the most recent success/failure evidence.
+- Each background Codex app-server is **per-run and ephemeral**. Its localhost port is expected to disappear after the run completes and TunnelDock terminates the worker process. Probing a finished run's old `/readyz` or `/healthz` endpoint is therefore not a valid current-health check.
+- `healthy` means a real end-to-end task reached a Codex final response and TunnelDock recovered the handoff. `degraded` means the most recent E2E transport evidence is a real dispatch/controller/poll failure.
+
+Transport evidence is persisted in the Project Room operational store (`transport_health.json`) and mirrored into `project_room.json` / `web_context.json`; the research memory is not polluted with routine transport telemetry.
+
 ## Acceptance evidence
 
 On 2026-10-02 the controller transport was exercised against all three existing Project Room automation threads simultaneously, without activating or switching any Codex Desktop conversation. Three independent localhost app-server processes resumed Point Tracking, IQA Agent, and 3D+MLLM automation threads at the same time; all three turns completed successfully in roughly 7–8 seconds and returned their distinct expected responses. No human/canonical thread received the diagnostic messages, and no temporary app-server or capability-token file remained afterward.
 
 This verifies the property the old `codex queue` path could not guarantee: Project Room execution is driven by thread ID and app-server ownership, not by which Codex Desktop conversation is visible in the UI.
+
+A later IQA Agent incident also established an important lifecycle rule: a finished run's old app-server port may have no listener even though Codex transport is healthy. Health must come from the latest end-to-end run evidence, not stale endpoint probing.
 
 ## What is canonical?
 

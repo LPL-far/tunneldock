@@ -16,8 +16,9 @@ const sessionDot = (status: string) => {
 };
 
 const codexDot = (status: string) => {
-  if (status === "running") return "bg-emerald-400";
-  if (status === "idle" || status === "ready") return "bg-sky-400";
+  if (status === "healthy" || status === "running") return "bg-emerald-400";
+  if (status === "degraded") return "bg-red-400";
+  if (status === "untested") return "bg-sky-400";
   return "bg-zinc-600";
 };
 
@@ -86,9 +87,12 @@ export const ProjectRoomList: React.FC<Props> = ({
 
             <div className="mt-2 rounded-lg border border-zinc-800/70 bg-zinc-950/35 px-2 py-1.5">
               <div className="flex items-center justify-between gap-2 text-[9px]">
-                <span className="flex items-center gap-1.5 text-zinc-500">
+                <span
+                  className="flex items-center gap-1.5 text-zinc-500"
+                  title={item.codex_last_error ?? "E2E transport health; separate from quota telemetry"}
+                >
                   <span className={`h-1.5 w-1.5 rounded-full ${codexDot(item.codex_status)}`} />
-                  Codex {item.codex_status}
+                  Codex transport {item.codex_status}
                 </span>
                 {item.codex_active_run_id && (
                   <span className="truncate font-mono text-zinc-600" title={item.codex_active_run_id}>

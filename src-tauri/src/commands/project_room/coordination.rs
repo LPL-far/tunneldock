@@ -13,6 +13,7 @@ This project is optimized for top-conference research, not product feature accum
 - Remove obsolete files, temporary patches, stale logs, abandoned scripts, and outdated documentation after their replacement is verified.
 - Record meaningful experiments, including negative results. Code completion alone does not finish a research task; evidence and interpretation must enter project memory.
 - Project memory is lifecycle-managed, not append-only prompt text. Keep canonical/current memory bounded; move settled or superseded history into `.project_memory/archive/`, preserve lifecycle events in the append-only ledger, and read historical detail only on demand.
+- Agent capacity/quota telemetry and task-transport health are separate signals. `capacities[].available` only means runtime/quota availability. Use `transports[]` for communication health. Codex app-server endpoints are per-run ephemeral; once a run finishes, its old localhost port is expected to disappear and must not be probed as a current health check.
 
 ## Default agent roles
 - ChatGPT: coordinator, research lead, experiment interpreter, final reviewer, and quota-allocation brain.
@@ -490,6 +491,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         },
         "agents": &snapshot.agents,
         "capacities": &snapshot.capacities,
+        "transports": &snapshot.transports,
         "tasks": tasks,
         "experiments": experiments,
         "discussion": discussion,
@@ -564,6 +566,12 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         },
         "agents": &snapshot.agents,
         "capacities": &snapshot.capacities,
+        "transports": &snapshot.transports,
+        "agent_health_semantics": {
+            "capacities": "quota/runtime telemetry only; available=true does NOT prove task communication health",
+            "transports": "end-to-end task transport evidence; use this for healthy/degraded/running/untested decisions",
+            "ephemeral_endpoints": "Codex per-run app-server ports are temporary and normally disappear after a run; never probe a finished run's old port to infer current health"
+        },
         "tasks": web_tasks,
         "experiments": web_experiments,
         "discussion": web_discussion,
