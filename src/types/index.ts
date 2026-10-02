@@ -98,6 +98,24 @@ export interface AgentCapacity {
   quota_windows: AgentQuotaWindow[];
 }
 
+export interface MemoryFileHealth {
+  file: string;
+  bytes: number;
+  budget_bytes: number;
+  utilization: number;
+  status: string;
+}
+
+export interface MemoryHealth {
+  total_current_bytes: number;
+  total_archive_bytes: number;
+  ledger_events: number;
+  requires_compaction: boolean;
+  near_budget: boolean;
+  files: MemoryFileHealth[];
+  updated_at: string;
+}
+
 export interface ProjectMemory {
   memory_index: string;
   project_state: string;
@@ -224,6 +242,7 @@ export interface AgentRuntimeInfo {
 export interface ProjectRoomSnapshot {
   config: ProjectRoomConfig;
   memory: ProjectMemory;
+  memory_health: MemoryHealth;
   agents: ProjectAgentPolicy[];
   capacities: AgentCapacity[];
   tasks: ProjectTask[];

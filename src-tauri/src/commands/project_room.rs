@@ -1,7 +1,8 @@
 use crate::models::{
     AgentCapacity, AgentQuotaWindow, AgentRun, AgentRuntimeInfo, HygieneCandidate,
-    ProjectAgentPolicy, ProjectDiscussionMessage, ProjectExperiment, ProjectMemory, ProjectRemote,
-    ProjectRoomConfig, ProjectRoomSnapshot, ProjectRoomSummary, ProjectTask,
+    MemoryFileHealth, MemoryHealth, ProjectAgentPolicy, ProjectDiscussionMessage,
+    ProjectExperiment, ProjectMemory, ProjectRemote, ProjectRoomConfig, ProjectRoomSnapshot,
+    ProjectRoomSummary, ProjectTask,
 };
 use crate::state::AppState;
 use crate::utils::chappie_broker;
@@ -29,6 +30,9 @@ const RESULTS_FILE: &str = "RESULTS.md";
 const REFERENCES_FILE: &str = "REFERENCES.md";
 const DOCUMENTS_FILE: &str = "DOCUMENTS.md";
 const MEMORY_PROTOCOL_FILE: &str = "MEMORY_PROTOCOL.md";
+const MEMORY_STATUS_FILE: &str = "MEMORY_STATUS.json";
+const MEMORY_ARCHIVE_DIR: &str = "archive";
+const MEMORY_LEDGER_DIR: &str = "ledger";
 const LEGACY_CONTROL_MEMORY_FILE: &str = "memory.json";
 const AGENTS_FILE: &str = "agents.json";
 const CAPACITIES_FILE: &str = "capacities.json";
@@ -63,7 +67,10 @@ use agent_worker::{
     run_dir, task_prompt,
 };
 use coordination::{reconcile_project_operational_state_once, sync_project_bridge};
-use memory::{ensure_project_memory, load_project_memory, project_memory_dir, save_project_memory};
+use memory::{
+    append_memory_ledger, ensure_project_memory, load_project_memory, project_memory_dir,
+    refresh_memory_status, save_project_memory,
+};
 use telemetry::{agent_runtimes, current_agent_capacities, find_codex_executable};
 
 #[cfg(test)]
@@ -406,6 +413,7 @@ fn load_snapshot_unlocked(
     let config = read_json::<ProjectRoomConfig>(&dir.join(CONFIG_FILE))?;
     Ok(ProjectRoomSnapshot {
         memory: load_project_memory(&config)?,
+        memory_health: refresh_memory_status(&config)?,
         config,
         agents: read_json(&dir.join(AGENTS_FILE))?,
         capacities: read_json(&dir.join(CAPACITIES_FILE))?,

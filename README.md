@@ -123,7 +123,7 @@ npm run tauri build
 
 更完整的实践与故障排查，参见 [docs/OpenAI Tunnel + Chappie + Pi.md](docs/OpenAI%20Tunnel%20%2B%20Chappie%20%2B%20Pi.md)。
 关于系统设计、通信协议与底层核心原理解析，参见 [docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md](docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md)。
-Project Room 的持久化科研记忆、数据/实验/结果/模型/引用组织与三 Agent review/finalization 规则，参见 [docs/PROJECT_ROOM_MEMORY_ARCHITECTURE.md](docs/PROJECT_ROOM_MEMORY_ARCHITECTURE.md)。
+Project Room 的持久化科研记忆、数据/实验/结果/模型/引用组织与三 Agent review/finalization 规则，参见 [docs/PROJECT_ROOM_MEMORY_ARCHITECTURE.md](docs/PROJECT_ROOM_MEMORY_ARCHITECTURE.md)。长期记忆的分层、预算、archive/ledger、progressive disclosure 与 compaction 设计见 [docs/MEMORY_LIFECYCLE_V2.md](docs/MEMORY_LIFECYCLE_V2.md)。
 Codex human thread / automation thread 的后台并行控制器设计，参见 [docs/CODEX_BACKGROUND_CONTROLLER.md](docs/CODEX_BACKGROUND_CONTROLLER.md)。
 
 ## 配置文件

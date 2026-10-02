@@ -12,7 +12,7 @@ This project is optimized for top-conference research, not product feature accum
 - Keep core logic simple, explicit, and testable. Correctness is more important than speed of implementation.
 - Remove obsolete files, temporary patches, stale logs, abandoned scripts, and outdated documentation after their replacement is verified.
 - Record meaningful experiments, including negative results. Code completion alone does not finish a research task; evidence and interpretation must enter project memory.
-- Project memory is a living current-state document. Update it when method decisions, evidence, known problems, or next actions change.
+- Project memory is lifecycle-managed, not append-only prompt text. Keep canonical/current memory bounded; move settled or superseded history into `.project_memory/archive/`, preserve lifecycle events in the append-only ledger, and read historical detail only on demand.
 
 ## Default agent roles
 - ChatGPT: coordinator, research lead, experiment interpreter, final reviewer, and quota-allocation brain.
@@ -99,13 +99,14 @@ Use this after `consult.reviewed` and after ChatGPT Web has actually updated can
   "kind": "memory.commit",
   "author": "chatgpt",
   "consultation_id": "CONSULTATION-...",
-  "changed_files": ["PROJECT_STATE.md", "SESSION_HANDOFF.md", "MODEL_DESIGN.md"]
+  "changed_files": ["PROJECT_STATE.md", "SESSION_HANDOFF.md", "MODEL_DESIGN.md"],
+  "archive_files": ["archive/model/2026-Q4.md"]
 }
 ```
 After `memory.commit`, the consultation moves to `awaiting_cleanup` rather than finalizing.
 
 ## cleanup.commit
-Use this only after memory has been committed. ChatGPT Web must review and integrate five categories: `memory`, `documents`, `code`, `logs`, and `scratch`. `checked_paths` must include `.` so the entire Project Room is scanned. Paths listed as removed must truly be gone; archived/retained paths must exist; remaining hygiene candidates must be explicitly accounted for as archived or retained evidence.
+Use this only after memory has been committed. If `web_context.json -> memory.health.requires_compaction=true`, first move superseded/history detail from the listed over-budget canonical files into the matching `.project_memory/archive/<domain>/` location, rewrite canonical memory as current truth, and submit `memory.commit` again. Then ChatGPT Web must review and integrate five categories: `memory`, `documents`, `code`, `logs`, and `scratch`. `checked_paths` must include `.` so the entire Project Room is scanned. Paths listed as removed must truly be gone; archived/retained paths must exist; remaining hygiene candidates must be explicitly accounted for as archived or retained evidence.
 ```json
 {
   "kind": "cleanup.commit",
@@ -182,7 +183,7 @@ Rules:
 - If the two agents materially disagree, ChatGPT may issue one focused follow-up `consult.request` with the same `thread_id`. The follow-up gets a new `consultation_id`, so it has its own barrier. Avoid recursive debate unless the user explicitly asks for it.
 - Before asking the human to decide a code/method question, ChatGPT must personally inspect the relevant diff or source files and surface only the decisive code-review points; worker handoffs are evidence, not a substitute for review.
 - `decision.record` is written only after the human researcher explicitly decides. Keep it concise and durable; never record an unresolved recommendation as a decision.
-- Canonical research memory remains under `.project_memory/`; update it directly after meaningful decisions/results. Finalization also requires cleanup/integration: superseded code/docs are removed or archived, disposable logs/scratch are deleted, and retained logs must be unique evidence.
+- Canonical research memory remains under `.project_memory/`; update it directly after meaningful decisions/results. Root canonical files are bounded current materialized views. Historical/superseded research memory belongs in `archive/`; lifecycle/audit events belong in `ledger/`. If memory health reports over-budget canonical files, compact before finalization. Finalization also requires cleanup/integration: superseded code/docs are removed or archived, disposable logs/scratch are deleted, and retained logs must be unique evidence.
 - Project isolation is strict. Never write an event into another project's inbox unless the user explicitly requests a cross-project handoff.
 "#
 }
@@ -474,6 +475,10 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             "references": memory_dir.join(REFERENCES_FILE),
             "documents": memory_dir.join(DOCUMENTS_FILE),
             "protocol": memory_dir.join(MEMORY_PROTOCOL_FILE),
+            "status": memory_dir.join(MEMORY_STATUS_FILE),
+            "archive": memory_dir.join(MEMORY_ARCHIVE_DIR),
+            "ledger": memory_dir.join(MEMORY_LEDGER_DIR),
+            "health": &snapshot.memory_health,
         },
         "bridge_limits": {
             "tasks": 80,
@@ -552,6 +557,10 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             "references": memory_dir.join(REFERENCES_FILE),
             "documents": memory_dir.join(DOCUMENTS_FILE),
             "protocol": memory_dir.join(MEMORY_PROTOCOL_FILE),
+            "status": memory_dir.join(MEMORY_STATUS_FILE),
+            "archive": memory_dir.join(MEMORY_ARCHIVE_DIR),
+            "ledger": memory_dir.join(MEMORY_LEDGER_DIR),
+            "health": &snapshot.memory_health,
         },
         "agents": &snapshot.agents,
         "capacities": &snapshot.capacities,
@@ -566,7 +575,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             "awaiting_web_reviews": awaiting_web_reviews,
             "awaiting_memory_commits": awaiting_memory_commits,
             "awaiting_cleanups": awaiting_cleanups,
-            "rule": "A consultation is final only when state=finalized. Wait for workers, review all handoffs, commit canonical memory, then clean/consolidate obsolete documents, code, logs and scratch and write cleanup.commit. Failed/blocked agents are missing evidence, never consensus."
+            "rule": "A consultation is final only when state=finalized. Wait for workers, review all handoffs, commit canonical memory, compact over-budget current memory into archive when memory.health.requires_compaction=true, then clean/consolidate obsolete documents, code, logs and scratch and write cleanup.commit. Failed/blocked agents are missing evidence, never consensus."
         },
         "detail_sources": {
             "full_snapshot": bridge_dir.join(BRIDGE_FILE),
@@ -730,6 +739,44 @@ fn validate_cleanup_commit(
     Ok(candidates)
 }
 
+fn validate_memory_archive_files(
+    memory_dir: &Path,
+    archive_files: &[String],
+) -> Result<(), String> {
+    for value in archive_files {
+        let path = Path::new(value);
+        if path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return Err(format!("memory.commit archive_files 路径越界: {}", value));
+        }
+        let normalized = value.replace('\\', "/");
+        if normalized != MEMORY_ARCHIVE_DIR
+            && !normalized.starts_with(&format!("{}/", MEMORY_ARCHIVE_DIR))
+        {
+            return Err(format!(
+                "memory.commit archive_files 必须位于 {}/ 下: {}",
+                MEMORY_ARCHIVE_DIR, value
+            ));
+        }
+        let full_path = memory_dir.join(path);
+        if !full_path.exists() {
+            return Err(format!(
+                "memory.commit 声明 archive 但路径不存在: {}",
+                full_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_memory_commit_files(
     memory_dir: &Path,
     changed_files: &[String],
@@ -874,7 +921,8 @@ pub(super) fn process_project_event_unlocked(
             let rationale = event_string(value, "rationale");
             let evidence = event_string_array(value, "evidence");
             let thread_id = event_string(value, "thread_id");
-            let memory_dir = project_memory_dir(&load_snapshot_unlocked(state, project_id)?.config);
+            let config = load_snapshot_unlocked(state, project_id)?.config;
+            let memory_dir = project_memory_dir(&config);
             let decisions_path = memory_dir.join(DECISIONS_FILE);
             let mut current = fs::read_to_string(&decisions_path)
                 .unwrap_or_else(|_| "# Durable Decisions\n".to_string());
@@ -899,6 +947,18 @@ pub(super) fn process_project_event_unlocked(
             }
             fs::write(&decisions_path, current)
                 .map_err(|error| format!("写入 {} 失败: {}", decisions_path.display(), error))?;
+            append_memory_ledger(
+                &config,
+                serde_json::json!({
+                    "kind": "decision.record",
+                    "title": title.clone(),
+                    "decision": decision.clone(),
+                    "rationale": rationale.clone(),
+                    "evidence": evidence.clone(),
+                    "thread_id": thread_id.clone(),
+                    "author": author.clone(),
+                }),
+            )?;
 
             let discussion_path = dir.join(DISCUSSION_FILE);
             let mut messages = read_json::<Vec<ProjectDiscussionMessage>>(&discussion_path)?;
@@ -1108,6 +1168,7 @@ pub(super) fn process_project_event_unlocked(
             let mut changed_files = event_string_array(value, "changed_files");
             changed_files.sort();
             changed_files.dedup();
+            let archive_files = event_string_array(value, "archive_files");
             if changed_files.is_empty() {
                 return Err("memory.commit 缺少 changed_files".to_string());
             }
@@ -1146,6 +1207,17 @@ pub(super) fn process_project_event_unlocked(
             let config = load_snapshot_unlocked(state, project_id)?.config;
             let memory_dir = project_memory_dir(&config);
             validate_memory_commit_files(&memory_dir, &changed_files, reviewed_at)?;
+            validate_memory_archive_files(&memory_dir, &archive_files)?;
+            append_memory_ledger(
+                &config,
+                serde_json::json!({
+                    "kind": "memory.commit",
+                    "consultation_id": consultation_id.clone(),
+                    "changed_files": changed_files.clone(),
+                    "archive_files": archive_files,
+                    "author": author.clone(),
+                }),
+            )?;
 
             for index in member_indexes {
                 tasks[index].memory_committed = true;
@@ -1225,6 +1297,20 @@ pub(super) fn process_project_event_unlocked(
             }
 
             let config = load_snapshot_unlocked(state, project_id)?.config;
+            let memory_health = refresh_memory_status(&config)?;
+            if memory_health.requires_compaction {
+                let over_budget = memory_health
+                    .files
+                    .iter()
+                    .filter(|file| file.status == "over_budget")
+                    .map(|file| format!("{} ({}/{})", file.file, file.bytes, file.budget_bytes))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "cleanup.commit 拒绝 finalization：canonical memory 超预算，必须先 compact 到 archive 并重新 memory.commit。{}",
+                    over_budget
+                ));
+            }
             let root = PathBuf::from(&config.local_root);
             let candidates = validate_cleanup_commit(
                 &root,
@@ -1240,6 +1326,20 @@ pub(super) fn process_project_event_unlocked(
                 tasks[index].updated_at = now.clone();
             }
             write_json(&tasks_path, &tasks)?;
+            append_memory_ledger(
+                &config,
+                serde_json::json!({
+                    "kind": "cleanup.commit",
+                    "consultation_id": consultation_id.clone(),
+                    "reviewed_categories": reviewed_categories.clone(),
+                    "checked_paths": checked_paths.clone(),
+                    "removed_paths": removed_paths.clone(),
+                    "archived_paths": archived_paths.clone(),
+                    "retained_paths": retained_paths.clone(),
+                    "summary": summary.clone(),
+                    "author": author.clone(),
+                }),
+            )?;
 
             let discussion_path = dir.join(DISCUSSION_FILE);
             let mut messages = read_json::<Vec<ProjectDiscussionMessage>>(&discussion_path)?;

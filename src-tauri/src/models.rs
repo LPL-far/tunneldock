@@ -145,6 +145,26 @@ pub struct AgentCapacity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryFileHealth {
+    pub file: String,
+    pub bytes: u64,
+    pub budget_bytes: u64,
+    pub utilization: f64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryHealth {
+    pub total_current_bytes: u64,
+    pub total_archive_bytes: u64,
+    pub ledger_events: usize,
+    pub requires_compaction: bool,
+    pub near_budget: bool,
+    pub files: Vec<MemoryFileHealth>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectMemory {
     #[serde(default)]
     pub memory_index: String,
@@ -306,6 +326,7 @@ pub struct AgentRuntimeInfo {
 pub struct ProjectRoomSnapshot {
     pub config: ProjectRoomConfig,
     pub memory: ProjectMemory,
+    pub memory_health: MemoryHealth,
     pub agents: Vec<ProjectAgentPolicy>,
     pub capacities: Vec<AgentCapacity>,
     pub tasks: Vec<ProjectTask>,

@@ -564,6 +564,7 @@ export const ProjectRoomsView: React.FC = () => {
               {section === "memory" && (
                 <MemorySection
                   draft={memoryDraft}
+                  health={room.memory_health}
                   busy={busy}
                   onChange={setMemoryDraft}
                   onSave={() => void saveMemory()}

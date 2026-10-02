@@ -1,6 +1,8 @@
 # Project Room Persistent Research Memory
 
-TunnelDock Project Room uses a two-layer design:
+TunnelDock Project Room uses a lifecycle-managed design. The canonical organization below remains the human-readable current layer; long-lived historical growth is governed by [MEMORY_LIFECYCLE_V2.md](MEMORY_LIFECYCLE_V2.md).
+
+The base organization uses two conceptual asset layers:
 
 1. **Canonical research memory** under `<project>/.project_memory/` stores current truth, decisions, evidence indexes, and pointers.
 2. **Project-native assets** stay where they belong: datasets, checkpoints, code, videos, figures, PDFs, raw logs, and result artifacts are not copied into memory. Canonical memory records their path, version/hash, provenance, and evidence status.
@@ -24,7 +26,7 @@ The goal is to let ChatGPT Web, Codex, and Antigravity/Gemini review the same pr
 └── MEMORY_PROTOCOL.md    # generated storage/review/finalization rules
 ```
 
-`MEMORY_INDEX.md` and `MEMORY_PROTOCOL.md` are TunnelDock-managed contracts and are refreshed automatically. Existing project-authored canonical files are never overwritten when the layout is introduced; missing domain files are created from templates.
+`MEMORY_INDEX.md` and `MEMORY_PROTOCOL.md` are TunnelDock-managed contracts and are refreshed automatically. `MEMORY_STATUS.json`, `archive/`, and `ledger/` are lifecycle infrastructure: current canonical files remain bounded while historical research memory moves out of default context. Existing project-authored canonical files are never overwritten when the layout is introduced; missing domain files are created from templates.
 
 ## Responsibility of each file
 

@@ -1,10 +1,11 @@
 import React from "react";
 import { Save } from "lucide-react";
-import { ProjectMemory } from "../../types";
+import { MemoryHealth, ProjectMemory } from "../../types";
 import { useTranslation } from "../../i18n";
 
 interface Props {
   draft: ProjectMemory;
+  health: MemoryHealth;
   busy: boolean;
   onChange: (memory: ProjectMemory) => void;
   onSave: () => void;
@@ -12,6 +13,7 @@ interface Props {
 
 export const MemorySection: React.FC<Props> = ({
   draft,
+  health,
   busy,
   onChange,
   onSave,
@@ -50,6 +52,44 @@ export const MemorySection: React.FC<Props> = ({
           <Save className="w-3.5 h-3.5" />
           {t("common.save")}
         </button>
+      </div>
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-[11px] font-medium text-zinc-300">
+              {t("project_rooms.memory_governor")}
+            </div>
+            <div className="mt-1 text-[10px] text-zinc-600">
+              {t("project_rooms.memory_current")}: {(health.total_current_bytes / 1024).toFixed(1)} KB · {t("project_rooms.memory_archive")}: {(health.total_archive_bytes / 1024).toFixed(1)} KB · {t("project_rooms.memory_events")}: {health.ledger_events}
+            </div>
+          </div>
+          <span className={`rounded-md px-2 py-1 text-[10px] ${health.requires_compaction ? "bg-amber-950/60 text-amber-300" : health.near_budget ? "bg-yellow-950/50 text-yellow-300" : "bg-emerald-950/40 text-emerald-400"}`}>
+            {health.requires_compaction
+              ? t("project_rooms.memory_compaction_required")
+              : health.near_budget
+              ? t("project_rooms.memory_near_budget")
+              : t("project_rooms.memory_healthy")}
+          </span>
+        </div>
+        <div className="mt-3 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+          {health.files.map((file) => (
+            <div key={file.file} className="rounded-md border border-zinc-900 bg-black/20 px-2 py-1.5">
+              <div className="flex items-center justify-between gap-2 text-[9px]">
+                <span className="truncate font-mono text-zinc-500" title={file.file}>{file.file}</span>
+                <span className={file.status === "over_budget" ? "text-amber-300" : file.status === "near_budget" ? "text-yellow-300" : "text-zinc-600"}>
+                  {Math.round(file.utilization * 100)}%
+                </span>
+              </div>
+              <div className="mt-1 h-1 overflow-hidden rounded bg-zinc-900">
+                <div
+                  className="h-full bg-zinc-600"
+                  style={{ width: `${Math.min(100, file.utilization * 100)}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {editors.map(([key, label, rows]) => (
