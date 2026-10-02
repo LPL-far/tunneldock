@@ -194,7 +194,7 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
 4. 会话就绪后由 Chappie Broker 提供专属 Session ID。
 
 Project Room 中 `enabled=true && keep_session_alive=true` 的工作区采用不同生命周期：
-- Windows 下默认生成 `runtime/project-pi/<workspace_id>/pi_worker.js`，由 WMI/CIM `Win32_Process.Create` 直接启动隐藏的 Node host；
+- Windows 下默认生成 `runtime/project-pi/<workspace_id>/pi_worker.js`，由 WMI `Win32_Process.Create` + `Win32_ProcessStartup.ShowWindow=0` 直接启动真正无窗口的 Node host；
 - Node host 直接 spawn Pi CLI 的 Node entrypoint，持有 child stdin，写入一次 `get_state` 后保持 pipe 打开，不再需要 `cmd.exe` wrapper 或 `ping -t` producer；
 - Node host PID 写入 `wrapper.pid` 并同时保存在 workspace 状态中；Restart/migration 会把当前 `session_id` 通过 Pi 原生 `--session-id` 传回新进程，尽量保持网页绑定不变；只有非标准 Pi 安装、无法定位 CLI JS 时才 fallback 到旧 `pi_worker.cmd` 兼容路径；
 - wrapper/Pi 进程树属于 WMI 服务而不是 TunnelDock/Tauri，因此开发热重载、窗口关闭或应用 restart 不会杀掉 Project Room Pi；

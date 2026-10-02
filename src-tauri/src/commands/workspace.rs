@@ -126,7 +126,7 @@ fn spawn_durable_project_pi(
     };
 
     let script = format!(
-        "$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='{}'}}; if($r.ReturnValue -ne 0){{Write-Error ('Win32_Process.Create failed: '+$r.ReturnValue); exit 1}}; [Console]::Out.Write($r.ProcessId)",
+        "$startup=([wmiclass]'Win32_ProcessStartup').CreateInstance(); $startup.ShowWindow=0; $r=([wmiclass]'Win32_Process').Create('{}',$null,$startup); if($r.ReturnValue -ne 0){{Write-Error ('Win32_Process.Create failed: '+$r.ReturnValue); exit 1}}; [Console]::Out.Write($r.ProcessId)",
         powershell_single_quote(&command_line)
     );
     let output = execute_powershell(&script, None);
