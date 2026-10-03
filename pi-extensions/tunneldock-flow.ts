@@ -29,8 +29,12 @@ export function boundText(cwd: string, text: string): { text: string; path: stri
   const header = `[TunnelDock: ${bytes} UTF-8 bytes saved intact to ${path}. Output below is PARTIAL. Use read with narrow line ranges; do not infer full success or absence of errors from this excerpt.]\n`;
   const tail = Array.from(text).slice(-600).join('');
   const separator = '\n\n[… middle omitted; full result retained …]\n\n';
-  const budget = MAX_TEXT_BYTES - Buffer.byteLength(header + separator + tail);
-  return { text: header + utf8Head(text, Math.max(0, budget)) + separator + tail, path, bytes };
+  const findings = text.split('\n').map((line, index) => ({line,index}))
+    .filter(({line}) => /\b(error|failed|failure|panic|exception|blocked)\b|错误|失败|阻塞/i.test(line))
+    .slice(0, 6).map(({line,index}) => `L${index+1}: ${utf8Head(line,200)}`).join('\n');
+  const diagnostic = findings ? `\nSelected diagnostic lines (not exhaustive; inspect full source):\n${findings}\n` : '';
+  const budget = MAX_TEXT_BYTES - Buffer.byteLength(header + diagnostic + separator + tail);
+  return { text: header + diagnostic + utf8Head(text, Math.max(0, budget)) + separator + tail, path, bytes };
 }
 function scoped(cwd: string): boolean {
   try {

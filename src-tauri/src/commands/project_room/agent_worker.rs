@@ -358,7 +358,9 @@ Project boundaries:
 - Project Room local root: {local}
 - {workspace_rule}
 - Remote workspace: {remote_host}:{remote_root}
-- Project Room snapshot: {local}\.tunneldock\project_room.json
+- Compact task state: {local}\.tunneldock\web_status.json
+- Versioned context index (when ready): {local}\.tunneldock\context\current.json
+- Full Project Room snapshot (on demand): {local}\.tunneldock\project_room.json
 - Constitution: {local}\.tunneldock\CONSTITUTION.md
 - Canonical memory: {local}\.project_memory\PROJECT_STATE.md and SESSION_HANDOFF.md
 - {write_scope}
@@ -371,7 +373,7 @@ Research rules:
 - Never import assumptions from another Project Room.
 - Reviewer(s): {reviewers}
 
-Before editing/reviewing, read the Project Room snapshot, Constitution, MEMORY_INDEX.md, PROJECT_STATE.md, SESSION_HANDOFF.md, and the relevant domain memory named by MEMORY_INDEX.md (MODEL_DESIGN / DATA_CATALOG / EXPERIMENTS / RESULTS / REFERENCES / DOCUMENTS / DECISIONS), plus project instructions (AGENTS.md/README) needed by the task.
+Before editing/reviewing, start with web_status.json, Constitution, MEMORY_INDEX.md, and the project instructions (AGENTS.md/README). When .tunneldock/context/status.json is ready, read .tunneldock/context/current.json and its hot working-set path for orientation; use the scoped tunneldock_context search/read/impact tool when available. This incomplete generated view is NOT canonical truth. Read the current original constraints in PROJECT_STATE.md/SESSION_HANDOFF.md and the relevant domain/source sections before changing behavior; fully inspect decisive evidence and all required handoffs before accepting conclusions. If the index is missing, stale or blocked, use the original files directly. Read full project_room.json only when compact state omits needed task details. Do not batch-read unrelated historical memory or infer an absent constraint from a compressed excerpt.
 If the task is underspecified or conflicts with current evidence, state the conflict instead of inventing a design.
 After implementation, run the smallest sufficient correctness checks.
 {response_rule}

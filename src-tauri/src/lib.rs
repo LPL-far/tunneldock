@@ -57,6 +57,10 @@ pub fn run() {
                 }
             }
             tray::setup(app, setup_lifecycle)?;
+            commands::project_room::context_engine::start(
+                app.handle().clone(),
+                project_supervisor_state.clone(),
+            );
 
             let supervisor_app = app.handle().clone();
             let supervisor_state = project_supervisor_state.clone();
@@ -119,6 +123,7 @@ pub fn run() {
             commands::project_room::list_project_rooms,
             commands::project_room::get_project_room,
             commands::project_room::activity::get_project_activity,
+            commands::project_room::context_engine::query_project_context,
             commands::project_room::activity::read_project_handoff,
             commands::project_room::update_project_config,
             commands::project_room::update_project_memory,

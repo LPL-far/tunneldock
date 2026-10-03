@@ -222,3 +222,7 @@ tunneldock/
 ### Agent activity and review
 
 Project Rooms now show Codex and Antigravity/Gemini execution, receipt and actual Web-review state side by side, with bounded handoff previews and explicit attempt/thread identity. See [Agent activity and review receipts](docs/AGENT_ACTIVITY_AND_REVIEW.md) for lifecycle semantics, browser wake-up limitations and the scoped 8 KiB Pi output guard.
+
+### Local context and automated memory working set
+
+The native Project Room dashboard now exposes scoped context progress and searchable, versioned memory/code. A bounded 12 KiB retrieval working set refreshes automatically; canonical scientific memory is never silently rewritten. See [upstream integration and limits](docs/UPSTREAM_INTEGRATION.md) and [pinned source audit](docs/upstream-lock.json).

@@ -74,6 +74,10 @@ fn install_project_flow_guard() -> Result<(), String> {
             "tunneldock-wait.ts",
             include_str!("../../../pi-extensions/tunneldock-wait.ts"),
         ),
+        (
+            "tunneldock-context.ts",
+            include_str!("../../../pi-extensions/tunneldock-context.ts"),
+        ),
     ] {
         let path = root.join(name);
         if fs::read_to_string(&path).ok().as_deref() != Some(source) {

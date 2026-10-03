@@ -1,0 +1,325 @@
+{
+  "schema": 1,
+  "repos": [
+    {
+      "repo": "JuliusBrussee/caveman",
+      "commit": "17f574b51221b293c16c8e532bc3bf3fa9f4051c",
+      "committed_at": "2026-10-03T01:28:40Z",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      },
+      "inspected_files": [
+        {
+          "path": "README.md",
+          "sha256": "186875ddf5b77547599acc292bb8875703d6118e4705d86e307a259b62f8c034",
+          "bytes": 46861
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "bytes": 11358
+        },
+        {
+          "path": "LICENSING.md",
+          "sha256": "8db395e0461eb079c146779865748ac51546004925c72999ae2e266efb595a32",
+          "bytes": 3369
+        },
+        {
+          "path": "package.json",
+          "sha256": "41d0b612e2b8f0ad62bf34c307894b3d6e1fef54819657500355bfa8b3166297",
+          "bytes": 1071
+        }
+      ],
+      "tree_truncated": false,
+      "integration": "independent_concepts_adapter",
+      "vendored_source": false,
+      "inspected_source": [
+        {
+          "path": "LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "path": "LICENSING.md",
+          "sha256": "8db395e0461eb079c146779865748ac51546004925c72999ae2e266efb595a32"
+        },
+        {
+          "path": "package.json",
+          "sha256": "41d0b612e2b8f0ad62bf34c307894b3d6e1fef54819657500355bfa8b3166297"
+        },
+        {
+          "path": "README.md",
+          "sha256": "186875ddf5b77547599acc292bb8875703d6118e4705d86e307a259b62f8c034"
+        },
+        {
+          "path": "engine/compressors/invariants.go",
+          "sha256": "a6ed8a0abcfe49c541b3d87d97eb1a1d43467c8f9484634f926ae9b3bd32cf8c"
+        },
+        {
+          "path": "engine/compressors/log.go",
+          "sha256": "0bac2635f0aca8fcc55190e12da42f6dd32f021871bea03e08a65ddcc442efb8"
+        },
+        {
+          "path": "skills/caveman/SKILL.md",
+          "sha256": "34255a0215a7701eb83d508d03bc9560dc7bffbeb95a145ad2921ad2598a03bf"
+        },
+        {
+          "path": "source/engine/compressors/invariants.go",
+          "sha256": "a6ed8a0abcfe49c541b3d87d97eb1a1d43467c8f9484634f926ae9b3bd32cf8c"
+        },
+        {
+          "path": "source/engine/compressors/log.go",
+          "sha256": "0bac2635f0aca8fcc55190e12da42f6dd32f021871bea03e08a65ddcc442efb8"
+        },
+        {
+          "path": "source/skills/caveman/SKILL.md",
+          "sha256": "34255a0215a7701eb83d508d03bc9560dc7bffbeb95a145ad2921ad2598a03bf"
+        }
+      ]
+    },
+    {
+      "repo": "DietrichGebert/ponytail",
+      "commit": "c982cd411abb53323c4baa1baa3c2f020b8d0b08",
+      "committed_at": "2026-10-03T05:12:55Z",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "inspected_files": [
+        {
+          "path": "README.md",
+          "sha256": "8a102d7654df3b78d87e9a0cb8ed7605518f5c288692475319e89b3bbd31dfac",
+          "bytes": 24109
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "fb1bc6909ac3ef82d5c22106e32ef682b0cff66788fa915fb9b53b15c9d2f3ab",
+          "bytes": 1071
+        },
+        {
+          "path": "package.json",
+          "sha256": "eb3434dfc4e56b34a77154c879ef25bb5d453c69cc4a38f0a71b1c885bc5a7ed",
+          "bytes": 1283
+        }
+      ],
+      "tree_truncated": false,
+      "integration": "independent_concepts_adapter",
+      "vendored_source": false,
+      "inspected_source": [
+        {
+          "path": "LICENSE",
+          "sha256": "fb1bc6909ac3ef82d5c22106e32ef682b0cff66788fa915fb9b53b15c9d2f3ab"
+        },
+        {
+          "path": "package.json",
+          "sha256": "eb3434dfc4e56b34a77154c879ef25bb5d453c69cc4a38f0a71b1c885bc5a7ed"
+        },
+        {
+          "path": "README.md",
+          "sha256": "8a102d7654df3b78d87e9a0cb8ed7605518f5c288692475319e89b3bbd31dfac"
+        },
+        {
+          "path": "skills/ponytail/SKILL.md",
+          "sha256": "1316a2f3f95741d2300b116fe0c2d81ce4a9568656ed0a62643f54aaf09957f2"
+        },
+        {
+          "path": "source/skills/ponytail/SKILL.md",
+          "sha256": "1316a2f3f95741d2300b116fe0c2d81ce4a9568656ed0a62643f54aaf09957f2"
+        }
+      ]
+    },
+    {
+      "repo": "mksglu/context-mode",
+      "commit": "9f3ecc8b0aafd25d3592ffc31e4b02b1767f6089",
+      "committed_at": "2026-10-03T00:12:30Z",
+      "license": {
+        "key": "other",
+        "name": "Other",
+        "spdx_id": "NOASSERTION",
+        "url": null,
+        "node_id": "MDc6TGljZW5zZTA="
+      },
+      "inspected_files": [
+        {
+          "path": "README.md",
+          "sha256": "9308e09043c4746340662e7a72e68de155fc28d70a1dd316f5ff292596076d04",
+          "bytes": 94871
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "92f11a867c41c9e575ccb978ff205ae2011c244a14aa3c576e914e537105caa0",
+          "bytes": 3840
+        },
+        {
+          "path": "package.json",
+          "sha256": "f0a96c5affd66f5334f2f4cd5a1270e65018a0b83317b4e752cd6f60cdba8680",
+          "bytes": 5495
+        }
+      ],
+      "tree_truncated": false,
+      "integration": "independent_concepts_adapter",
+      "vendored_source": false,
+      "inspected_source": [
+        {
+          "path": "LICENSE",
+          "sha256": "92f11a867c41c9e575ccb978ff205ae2011c244a14aa3c576e914e537105caa0"
+        },
+        {
+          "path": "package.json",
+          "sha256": "f0a96c5affd66f5334f2f4cd5a1270e65018a0b83317b4e752cd6f60cdba8680"
+        },
+        {
+          "path": "README.md",
+          "sha256": "9308e09043c4746340662e7a72e68de155fc28d70a1dd316f5ff292596076d04"
+        },
+        {
+          "path": "source/src/store.ts",
+          "sha256": "d7b06661006e884832e0dcd27720ef2c59a585e301d9c7a38afc883330781cad"
+        },
+        {
+          "path": "source/src/session/snapshot.ts",
+          "sha256": "568ec1172043462d59da32f04f086465acf780a75936326d1183d1884787e39d"
+        },
+        {
+          "path": "src/store.ts",
+          "sha256": "d7b06661006e884832e0dcd27720ef2c59a585e301d9c7a38afc883330781cad"
+        },
+        {
+          "path": "src/session/snapshot.ts",
+          "sha256": "568ec1172043462d59da32f04f086465acf780a75936326d1183d1884787e39d"
+        }
+      ]
+    },
+    {
+      "repo": "colbymchenry/codegraph",
+      "commit": "dbb3d63cb1a92d04112dcc9ebb53bea4d1e317fb",
+      "committed_at": "2026-10-03T05:05:29Z",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "inspected_files": [
+        {
+          "path": "README.md",
+          "sha256": "eb84996efef40925f8a1acea1978537d18a3d1560e960e76ef7b081e5c03a071",
+          "bytes": 70865
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "e6d98f98c666bebe065ac2492a0a19232cc318d4d67bac3ca42ffb77bacc8809",
+          "bytes": 1070
+        },
+        {
+          "path": "package.json",
+          "sha256": "8b66a1a9bd9cc5eef26988f56b8a79b9c98128a3b5c6e4a8454cc6a5d3f01fb4",
+          "bytes": 2396
+        }
+      ],
+      "tree_truncated": false,
+      "integration": "independent_concepts_adapter",
+      "vendored_source": false,
+      "inspected_source": [
+        {
+          "path": "LICENSE",
+          "sha256": "e6d98f98c666bebe065ac2492a0a19232cc318d4d67bac3ca42ffb77bacc8809"
+        },
+        {
+          "path": "package.json",
+          "sha256": "8b66a1a9bd9cc5eef26988f56b8a79b9c98128a3b5c6e4a8454cc6a5d3f01fb4"
+        },
+        {
+          "path": "README.md",
+          "sha256": "eb84996efef40925f8a1acea1978537d18a3d1560e960e76ef7b081e5c03a071"
+        },
+        {
+          "path": "site/src/content/docs/guides/affected-tests.md",
+          "sha256": "089711f7cb8cd6d73292740a7b4f8964429eb20a1904a1fd1ea36adeb2491c67"
+        },
+        {
+          "path": "source/site/src/content/docs/guides/affected-tests.md",
+          "sha256": "089711f7cb8cd6d73292740a7b4f8964429eb20a1904a1fd1ea36adeb2491c67"
+        },
+        {
+          "path": "source/src/sync/watch-policy.ts",
+          "sha256": "e95f39b2dc8f873e7ccb03b4e9298596dd5cf421062e322b3023a0225aa9421b"
+        },
+        {
+          "path": "src/sync/watch-policy.ts",
+          "sha256": "e95f39b2dc8f873e7ccb03b4e9298596dd5cf421062e322b3023a0225aa9421b"
+        }
+      ]
+    },
+    {
+      "repo": "mvschwarz/openrig",
+      "commit": "a8c1c375811d8126d42148e15b81ccb235406c9b",
+      "committed_at": "2026-10-03T05:37:38Z",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      },
+      "inspected_files": [
+        {
+          "path": "README.md",
+          "sha256": "b512ba986693d526f817ffeafe17f276bb2d7cdf48776744cc9f1a7a6c37f5e6",
+          "bytes": 26532
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "c92a33920bf0cd3aa07ca2c479932ec900931ca1449948a4dc01d3bf979f45e3",
+          "bytes": 10763
+        },
+        {
+          "path": "package.json",
+          "sha256": "447fef3ddf56b4ab08df5f3328e967319e8785277bd87373eaa32e86ba7d54c4",
+          "bytes": 1571
+        }
+      ],
+      "tree_truncated": false,
+      "integration": "independent_concepts_adapter",
+      "vendored_source": false,
+      "inspected_source": [
+        {
+          "path": "LICENSE",
+          "sha256": "c92a33920bf0cd3aa07ca2c479932ec900931ca1449948a4dc01d3bf979f45e3"
+        },
+        {
+          "path": "package.json",
+          "sha256": "447fef3ddf56b4ab08df5f3328e967319e8785277bd87373eaa32e86ba7d54c4"
+        },
+        {
+          "path": "README.md",
+          "sha256": "b512ba986693d526f817ffeafe17f276bb2d7cdf48776744cc9f1a7a6c37f5e6"
+        },
+        {
+          "path": "packages/daemon/assets/plugins/openrig-core/skills/queue-handoff/SKILL.md",
+          "sha256": "d4d7e3e8772886b3771daffd60523b5f79040309b892c8be1afd47d1f7287f7b"
+        },
+        {
+          "path": "packages/daemon/assets/plugins/openrig-core/skills/seat-continuity-and-handover/SKILL.md",
+          "sha256": "c08aa84aa1888b8a5d63d5e3a6d2ec8b700b8b13177fba48661ba7c7508f44ff"
+        },
+        {
+          "path": "source/packages/daemon/assets/plugins/openrig-core/skills/queue-handoff/SKILL.md",
+          "sha256": "d4d7e3e8772886b3771daffd60523b5f79040309b892c8be1afd47d1f7287f7b"
+        },
+        {
+          "path": "source/packages/daemon/src/domain/continuity-stack-packets.ts",
+          "sha256": "d4b76076c828e126764d5b5a8825eedf48d1db448e7ff0b9e91e8085e777ceed"
+        }
+      ]
+    }
+  ],
+  "wechat_articles": "verification_shell_only; content pending"
+}

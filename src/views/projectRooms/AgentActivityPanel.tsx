@@ -4,6 +4,7 @@ import { useTranslation } from '../../i18n';
 import type { AgentActivityCard, HandoffPage, ProjectActivity, TaskActivity } from '../../types/activity';
 import { readProjectHandoff } from '../../api';
 import { duration, phaseStep, reviewPrompt } from './activityModel';
+import { ContextEnginePanel } from './ContextEnginePanel';
 
 const button = 'inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-300 hover:border-sky-500 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:opacity-40';
 export function AgentActivityPanel({ data, error, cwd }: { data: ProjectActivity | null; error: string | null; cwd: string }) {
@@ -61,6 +62,7 @@ export function AgentActivityPanel({ data, error, cwd }: { data: ProjectActivity
         <dt className="text-zinc-500">{awaiting ? t('activity.review_wait') : t('activity.elapsed')}</dt>
         <dd className="text-right font-mono text-zinc-300">{duration(awaiting ? task?.received_at ?? null : task?.started_at ?? null, !awaiting && task?.received_at ? Date.parse(task.received_at) : now)}</dd>
         <dt className="text-zinc-500">{t('activity.event_age')}</dt><dd className="text-right font-mono text-zinc-400">{duration(eventAt, now)}</dd>
+        {task?.next_owner && task.next_owner !== 'none' && <><dt className="text-zinc-500">{locale.startsWith('zh') ? '下一处理方' : 'Next owner'}</dt><dd className="text-right text-zinc-300">{task.next_owner === 'chatgpt' ? 'ChatGPT Web' : task.next_owner}</dd></>}
       </dl>
       <p className={`mt-2 min-h-4 text-[11px] ${quiet ? 'text-amber-400' : 'text-zinc-500'}`}>{quiet ? t('activity.quiet') : task?.progress ? t('activity.units', {count: task.progress.units}) : active ? t('activity.no_events') : task ? t('activity.attempts', {count: task.attempts}) : ''}</p>
       {task?.error && <p className="mt-2 break-words text-xs text-rose-300">{task.error}</p>}
@@ -86,6 +88,7 @@ export function AgentActivityPanel({ data, error, cwd }: { data: ProjectActivity
       {data.pending_reviews.slice(0,3).map(task => <div key={task.task_id} className="mt-2 flex items-center justify-between gap-2 text-xs text-zinc-400"><span className="truncate">{task.agent_id} · {task.title}</span><span className="shrink-0 font-mono text-amber-400/80">{duration(task.received_at,now)}</span></div>)}
     </div>}
     <p className="mt-3 text-[11px] leading-5 text-zinc-500">{t('activity.boundary')}</p>
+    {data && <ContextEnginePanel key={data.project_id} state={data.context_engine} cwd={cwd} projectId={data.project_id} now={now}/>}
     {notice && <p role="status" className="mt-2 break-words text-xs text-sky-300">{notice}</p>}
     {selected && <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-950 p-4">
       <div className="flex justify-between gap-3"><h4 className="text-sm text-zinc-100">{selected.title}</h4><button aria-label={t('activity.close')} className="text-zinc-400 hover:text-white" onClick={() => { request.current++; setSelected(null); }}><X size={17}/></button></div>

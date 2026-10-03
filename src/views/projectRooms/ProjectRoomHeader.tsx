@@ -259,6 +259,10 @@ export const ProjectRoomHeader: React.FC<Props> = ({
         </div>
       )}
 
+      <details className="border-t border-zinc-800/80">
+        <summary className="cursor-pointer px-5 py-2.5 text-xs text-zinc-400 hover:text-zinc-100">
+          {locale.startsWith('zh') ? 'Agent 额度与运行环境（展开详情）' : 'Agent capacity and runtimes (expand details)'}
+        </summary>
       <div
         className="grid gap-px bg-zinc-800/80"
         style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}
@@ -426,6 +430,7 @@ export const ProjectRoomHeader: React.FC<Props> = ({
           );
         })}
       </div>
+      </details>
     </div>
   );
 };

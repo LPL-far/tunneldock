@@ -44,6 +44,9 @@ This directory stores decisions, current truth, and indexes — not large assets
 - `MEMORY_STATUS.json` is system-generated health telemetry with byte budgets and compaction pressure.
 - Read progressively: current state -> relevant domain file -> archive/ledger only when the current task needs historical evidence.
 
+## Automatic retrieval working set
+TunnelDock independently refreshes `.tunneldock/context/current.json` and a versioned working-set Markdown (at most 12 KiB), without rewriting these canonical files. It preserves full source objects by SHA-256 and publishes coverage/missing-file information. Use `tunneldock_context` search/read/impact when available, or the native Project Room search UI, before expanding large files. The working set is incomplete and NOT canonical truth; reread the original constraint, result or evidence before final review. Empty lexical impact candidates never justify deleting code. Semantic memory consolidation remains a Web-reviewed change; cold snapshots are not automatically discarded.
+
 ## Review rule
 Codex and Antigravity/Gemini may inspect and challenge any domain document. Their reviews are evidence, not final truth. ChatGPT Web is the final reviewer: it must wait for required worker reviews, inspect decisive source/code itself, update the relevant canonical memory documents, and only then mark the review finalized.
 

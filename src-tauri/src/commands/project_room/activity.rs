@@ -108,6 +108,7 @@ fn task_view(task: &ProjectTask, runs: &[AgentRun]) -> Value {
         "handoff_available": run.map(has_handoff).unwrap_or(false),
         "reviewed_by": task.reviewed_by, "web_reviewed": task.web_reviewed,
         "review_started_at": review.as_ref().and_then(|v| v.get("started_at")),
+        "next_owner": if matches!(outcome, "received" | "reviewing" | "finalizing" | "blocked") { "chatgpt" } else if outcome == "running" { task.owner.as_str() } else { "none" },
         "progress": progress,
         "detail": if matches!(outcome, "blocked" | "received" | "reviewed" | "finalizing") {
             clip(&task.summary, 380)
@@ -229,6 +230,7 @@ pub fn get_project_activity(
             .join(ACTIVITY_FILE),
     )?;
     value["sampled_at"] = json!(local_now_rfc3339());
+    value["context_engine"] = super::context_engine::status(&config);
     Ok(value)
 }
 
@@ -310,13 +312,22 @@ mod tests {
     }
     #[test]
     fn receipt_is_not_review_until_reviewer_explicitly_starts() {
-        let root = std::env::temp_dir().join(format!("td-receipt-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        let root = std::env::temp_dir().join(format!(
+            "td-receipt-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
         fs::create_dir_all(&root).unwrap();
-        let mut r = run(); r.output_path = root.join("HANDOFF.md").to_string_lossy().into_owned();
+        let mut r = run();
+        r.output_path = root.join("HANDOFF.md").to_string_lossy().into_owned();
         fs::write(&r.output_path, "Worker result").unwrap();
-        let mut t = task(); t.status = "review".into();
+        let mut t = task();
+        t.status = "review".into();
         assert_eq!(phase(&t, Some(&r), None), "received");
-        assert_eq!(phase(&t, Some(&r), Some(&json!({"status":"reviewing"}))), "reviewing");
+        assert_eq!(
+            phase(&t, Some(&r), Some(&json!({"status":"reviewing"}))),
+            "reviewing"
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

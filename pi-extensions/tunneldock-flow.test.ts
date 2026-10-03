@@ -11,6 +11,16 @@ it('caps UTF-8 bytes and preserves complete content-addressed evidence', () => {
  expect(boundText(dir,text).path).toBe(result.path);
  } finally {rmSync(dir,{recursive:true,force:true});}
 });
+it('preserves a middle failure in the bounded preview without changing evidence',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'td-flow-errors-'));
+ try {
+  const source='ordinary line\n'.repeat(3000)+'ERROR: regression failed at step 42\n'+'ordinary tail\n'.repeat(3000);
+  const result=boundText(dir,source);
+  expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(MAX_TEXT_BYTES);
+  expect(result.text).toContain('L3001: ERROR: regression failed at step 42');
+  expect(result.text).toContain('not exhaustive');expect(readFileSync(result.path!,'utf8')).toBe(source);
+ } finally {rmSync(dir,{recursive:true,force:true});}
+});
 it('does not alter small results',()=>{ expect(boundText('.', 'PASS').text).toBe('PASS'); expect(utf8Head('证据',4)).toBe('证'); });
 it('retains the error flag and non-text content through the real hook',()=>{
  const dir=mkdtempSync(join(tmpdir(),'td-flow-hook-')); let handler: any;
