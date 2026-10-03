@@ -19,7 +19,13 @@ export function boundText(cwd: string, text: string): { text: string; path: stri
   mkdirSync(dir, { recursive: true });
   const id = createHash('sha256').update(text).digest('hex');
   const path = join(dir, `${id}.txt`);
-  if (!existsSync(path)) writeFileSync(path, text, { encoding: 'utf8', flag: 'wx' });
+  if (!existsSync(path)) {
+    try { writeFileSync(path, text, { encoding: 'utf8', flag: 'wx' }); }
+    catch (error) {
+      // Parallel tools may have published the same content-addressed result.
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
   const header = `[TunnelDock: ${bytes} UTF-8 bytes saved intact to ${path}. Output below is PARTIAL. Use read with narrow line ranges; do not infer full success or absence of errors from this excerpt.]\n`;
   const tail = Array.from(text).slice(-600).join('');
   const separator = '\n\n[… middle omitted; full result retained …]\n\n';
@@ -37,23 +43,23 @@ export default function (pi: ExtensionAPI) {
   pi.on('tool_result', (event, ctx) => {
     if (!scoped(ctx.cwd)) return;
     const text = event.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-    if (Buffer.byteLength(text) <= MAX_TEXT_BYTES) return;
     try {
+      const encoded = JSON.stringify(event.details);
+      const largeDetails = Boolean(encoded && Buffer.byteLength(encoded) > MAX_TEXT_BYTES);
+      if (Buffer.byteLength(text) <= MAX_TEXT_BYTES && !largeDetails) return;
       const bounded = boundText(ctx.cwd, text);
-      // Preserve images and the original error flag. Do not turn an error into success.
+      // Metadata may be large even when the human-readable text is tiny.
       const nonText = event.content.filter(c => c.type !== 'text');
       let details = event.details;
-      const encoded = JSON.stringify(details);
-      if (encoded && Buffer.byteLength(encoded) > MAX_TEXT_BYTES) {
-        const path = bounded.path + '.details.json';
-        writeFileSync(path, encoded, 'utf8');
-        details = { fullDetailsPath: path, originalTool: event.toolName, truncated: true };
+      if (largeDetails && encoded) {
+        const saved = boundText(ctx.cwd, encoded);
+        details = { fullDetailsPath: saved.path, originalTool: event.toolName, truncated: true };
       }
       return { content: [{type: 'text' as const, text: bounded.text}, ...nonText], details, isError: event.isError };
     } catch (error) {
       // Never silently discard an output when the evidence store cannot be written.
-      return { content: [{type: 'text' as const, text: `[TunnelDock output storage failed: ${String(error)}. The tool has already executed; do not blindly rerun a write. Inspect its artifact before continuing.]`}],
-        details: undefined, isError: true };
+      return { content: [{type: 'text' as const, text: utf8Head(`[TunnelDock output storage failed: ${String(error)}. The tool has already executed; do not blindly rerun a write. Inspect its artifact before continuing.]`, MAX_TEXT_BYTES)}, ...event.content.filter(c => c.type !== 'text')],
+        details: { originalTool: event.toolName, outputStorageFailed: true }, isError: true };
     }
   });
 }

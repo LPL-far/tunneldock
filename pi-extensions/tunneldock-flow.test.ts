@@ -22,6 +22,17 @@ it('retains the error flag and non-text content through the real hook',()=>{
  expect(Buffer.byteLength(result.content[0].text)).toBeLessThanOrEqual(MAX_TEXT_BYTES);
  } finally {rmSync(dir,{recursive:true,force:true});}
 });
+it('bounds metadata even when text is small',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'td-flow-details-')); let handler:any;
+ try {mkdirSync(join(dir,'.tunneldock'));writeFileSync(join(dir,'.tunneldock/session_binding.json'),JSON.stringify({project_id:'fixture',cwd:dir}));
+ extension({on:(_name:string,h:any)=>{handler=h;}} as any);
+ const details={rows:'z'.repeat(50000)};
+ const result=handler({content:[{type:'text',text:'PASS'}],toolName:'bash',isError:false,details},{cwd:dir});
+ expect(result.content[0].text).toBe('PASS');expect(result.isError).toBe(false);
+ expect(JSON.parse(readFileSync(result.details.fullDetailsPath,'utf8'))).toEqual(details);
+ expect(Buffer.byteLength(JSON.stringify(result.details))).toBeLessThan(MAX_TEXT_BYTES);
+ } finally {rmSync(dir,{recursive:true,force:true});}
+});
 it('does not touch unrelated projects',()=>{
  let h:any; extension({on:(_n:string,handler:any)=>{h=handler;}} as any);
  expect(h({content:[{type:'text',text:'x'.repeat(50000)}]}, {cwd:tmpdir()})).toBeUndefined();
