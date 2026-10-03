@@ -342,6 +342,48 @@ pub(super) fn cleanup_worker_artifacts(prompt_path: &str) {
     }
 }
 
+// Writer ownership is not the same thing as a running task. Desktop may keep
+// an idle thread loaded. Never delete its lock or terminate that other client.
+fn continuation_anchor(result: &serde_json::Value, expected_id: &str) -> Result<String, String> {
+    let thread = thread_from_result(result)?;
+    if thread.get("id").and_then(serde_json::Value::as_str) != Some(expected_id) {
+        return Err("ownership recovery: thread identity mismatch".to_string());
+    }
+    if !matches!(
+        thread
+            .pointer("/status/type")
+            .and_then(serde_json::Value::as_str),
+        Some("idle" | "notLoaded")
+    ) {
+        return Err(
+            "ownership recovery: owner is active or state is unknown; no automatic fork"
+                .to_string(),
+        );
+    }
+    let turns = thread
+        .get("turns")
+        .and_then(serde_json::Value::as_array)
+        .filter(|turns| !turns.is_empty())
+        .ok_or_else(|| "ownership recovery: no complete history available".to_string())?;
+    if turns.iter().any(|turn| {
+        !matches!(
+            turn.get("status").and_then(serde_json::Value::as_str),
+            Some("completed" | "failed" | "interrupted")
+        )
+    }) {
+        return Err("ownership recovery: unresolved turn exists; no automatic fork".to_string());
+    }
+    let last = turns.last().expect("non-empty checked");
+    if last.get("status").and_then(serde_json::Value::as_str) != Some("completed") {
+        return Err("ownership recovery: most recent turn did not complete".to_string());
+    }
+    last.get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| "ownership recovery: missing anchor ID".to_string())
+}
+
 pub(super) fn start_background_turn(
     executable: &Path,
     source_thread_id: &str,
@@ -407,7 +449,7 @@ pub(super) fn start_background_turn(
                     "title": "TunnelDock Codex Controller",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
-                "capabilities": {}
+                "capabilities": {"experimentalApi": true}
             }),
         )?;
         socket
@@ -419,6 +461,7 @@ pub(super) fn start_background_turn(
             .map_err(|error| format!("发送 Codex initialized 失败: {error}"))?;
 
         let mut created_thread = false;
+        let mut recovery: Option<serde_json::Value> = None;
         let thread_result = if let Some(existing) = automation_thread_id
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -435,9 +478,72 @@ pub(super) fn start_background_turn(
             ) {
                 Ok(result) => result,
                 Err(error) if error.contains("active writer") => {
-                    return Err(format!(
-                        "Codex automation thread {existing} 正在执行另一项后台任务；请等待该任务完成。"
-                    ));
+                    let before = resolve_thread(existing)?;
+                    let mut stored = rpc_request(&mut socket, &mut request_id, "thread/read",
+                        serde_json::json!({"threadId": existing, "includeTurns": false}))
+                        .map_err(|read_error| format!("Writer ownership conflict (not proof of active work): {error}; read-only inspection failed: {read_error}"))?;
+                    // Full history for long-lived threads exceeds the WebSocket
+                    // message limit. Only the latest turn boundary is required.
+                    let page = rpc_request(
+                        &mut socket,
+                        &mut request_id,
+                        "thread/turns/list",
+                        serde_json::json!({"threadId": existing, "limit": 1,
+                            "sortDirection": "desc", "itemsView": "notLoaded"}),
+                    )?;
+                    stored["thread"]["turns"] = page
+                        .get("data")
+                        .cloned()
+                        .ok_or("ownership recovery: missing turn-summary page")?;
+                    let anchor = continuation_anchor(&stored, existing).map_err(|reason| {
+                        format!("Writer ownership conflict: {error}; {reason}")
+                    })?;
+                    let source = thread_from_result(&stored)?;
+                    let cwd = source
+                        .get("cwd")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|cwd| !cwd.is_empty())
+                        .ok_or("ownership recovery: missing source cwd")?;
+                    if resolve_thread(existing)?.start_offset != before.start_offset {
+                        return Err(format!(
+                            "Writer ownership conflict: {error}; source changed during inspection"
+                        ));
+                    }
+                    // Copy the latest automation history, NOT the old human seed.
+                    // Pin the native fork to a completed turn; do not copy a partial turn.
+                    let forked = rpc_request(
+                        &mut socket,
+                        &mut request_id,
+                        "thread/fork",
+                        serde_json::json!({"threadId": existing, "lastTurnId": anchor,
+                            "excludeTurns": true, "approvalsReviewer": "auto_review"}),
+                    )?;
+                    let (successor, _) = thread_id_and_path(&forked)?;
+                    let successor_cwd = thread_from_result(&forked)?
+                        .get("cwd")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    if successor == existing
+                        || successor_cwd != cwd
+                        || resolve_thread(existing)?.start_offset != before.start_offset
+                    {
+                        return Err(format!("Ownership recovery source/cwd changed; fork {successor} left unactivated for inspection"));
+                    }
+                    created_thread = true;
+                    recovery = Some(serde_json::json!({
+                        "kind": "idle_writer_continuation", "previous_thread_id": existing,
+                        "current_thread_id": successor, "last_completed_turn_id": anchor,
+                        "cwd": cwd, "original_error": error, "lock_deleted": false,
+                        "old_owner_terminated": false, "turn_started": false,
+                        "recorded_at": local_now_rfc3339()
+                    }));
+                    if let Some(parent) = log_path.parent() {
+                        write_json(
+                            &parent.join("THREAD_RECOVERY.json"),
+                            recovery.as_ref().unwrap(),
+                        )?;
+                    }
+                    forked
                 }
                 Err(error)
                     if error.to_ascii_lowercase().contains("not found")
@@ -521,6 +627,16 @@ pub(super) fn start_background_turn(
                 error
             };
             return Err(detail);
+        }
+        if let Some(mut record) = recovery {
+            record["turn_started"] = serde_json::json!(true);
+            if let Some(parent) = log_path.parent() {
+                // Once the turn is accepted, do not kill it because a secondary
+                // audit write failed. Its initial recovery record already exists.
+                if let Err(error) = write_json(&parent.join("THREAD_RECOVERY.json"), &record) {
+                    eprintln!("Cannot update Codex recovery receipt: {error}");
+                }
+            }
         }
         let _ = socket.close(None);
 
@@ -657,7 +773,28 @@ pub(super) fn poll_run(
 
 #[cfg(test)]
 mod tests {
-    use super::{capability_token, terminal_update, user_message_turn_id, CodexRunUpdate};
+    use super::{
+        capability_token, continuation_anchor, terminal_update, user_message_turn_id,
+        CodexRunUpdate,
+    };
+
+    #[test]
+    fn ownership_recovery_requires_verified_completed_boundary() {
+        let mut value = serde_json::json!({"thread":{"id":"thread-a", "status":{"type":"notLoaded"},
+            "turns":[{"id":"turn-a","status":"completed"}]}});
+        assert_eq!(continuation_anchor(&value, "thread-a").unwrap(), "turn-a");
+        assert!(continuation_anchor(&value, "wrong-thread").is_err());
+        value["thread"]["turns"][0]["status"] = serde_json::json!("inProgress");
+        assert!(continuation_anchor(&value, "thread-a").is_err());
+        value["thread"]["turns"][0]["status"] = serde_json::json!("failed");
+        assert!(continuation_anchor(&value, "thread-a").is_err());
+        value["thread"]["turns"][0]["status"] = serde_json::json!("completed");
+        value["thread"]["status"]["type"] = serde_json::json!("active");
+        assert!(continuation_anchor(&value, "thread-a").is_err());
+        value["thread"]["status"]["type"] = serde_json::json!("notLoaded");
+        value["thread"]["turns"] = serde_json::json!([]);
+        assert!(continuation_anchor(&value, "thread-a").is_err());
+    }
 
     #[test]
     fn capability_token_is_256_bit_hex() {
@@ -665,6 +802,41 @@ mod tests {
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|ch| ch.is_ascii_hexdigit()));
         assert_ne!(token, capability_token());
+    }
+
+    #[test]
+    fn idle_writer_recovery_anchors_only_completed_history() {
+        let result = serde_json::json!({"thread":{"id":"owned","status":{"type":"notLoaded"},
+            "turns":[{"id":"earlier","status":"completed"},{"id":"latest","status":"completed"}]}});
+        assert_eq!(
+            super::continuation_anchor(&result, "owned").unwrap(),
+            "latest"
+        );
+    }
+
+    #[test]
+    fn writer_recovery_refuses_active_or_unsettled_turns() {
+        for (runtime, status) in [
+            ("active", "completed"),
+            ("notLoaded", "inProgress"),
+            ("notLoaded", "interrupted"),
+            ("systemError", "completed"),
+        ] {
+            let result = serde_json::json!({"thread":{"id":"owned","status":{"type":runtime},
+                "turns":[{"id":"last","status":status}]}});
+            assert!(super::continuation_anchor(&result, "owned").is_err());
+        }
+    }
+
+    #[test]
+    fn writer_recovery_refuses_missing_or_wrong_identity() {
+        for result in [
+            serde_json::json!({}),
+            serde_json::json!({"thread":{"id":"other","turns":[]}}),
+            serde_json::json!({"thread":{"id":"owned","status":{"type":"notLoaded"},"turns":[]}}),
+        ] {
+            assert!(super::continuation_anchor(&result, "owned").is_err());
+        }
     }
 
     #[test]

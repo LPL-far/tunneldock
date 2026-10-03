@@ -91,6 +91,24 @@ A later IQA Agent incident also established an important lifecycle rule: a finis
 
 A Point Tracking implementation run established the complementary process-lifecycle rule: TunnelDock's own dev hot reload must not terminate an in-flight Codex worker. Direct Windows job-breakaway flags were rejected by the host (`Access denied`), so the final implementation uses WMI/CIM process creation. In the acceptance run, TunnelDock PID `50528` exited during hot reload while the durable worker host and Codex child continued serving port `50819`; the restarted TunnelDock PID `65396` re-read the same persisted run and continued rollout polling while the rollout kept growing. Project Room workers are therefore durable across UI/process restarts; persisted host PID/thread/rollout offset is the recovery contract.
 
+## Writer ownership conflicts and safe continuation
+
+`already has an active writer` identifies exclusive thread-store ownership. It does not prove a Project Room task is executing. Codex Desktop can retain an idle automation thread. TunnelDock must preserve this original error rather than label it as another background task.
+
+On an automation-thread resume conflict:
+
+1. Refuse duplicate dispatch while a managed run for this agent remains `running` or `interactive`.
+2. Use native `thread/read` (read-only, with turns). Require the exact thread identity, known idle/notLoaded metadata, a nonempty history, no unresolved turns, and a completed final turn. `notLoaded` alone is not evidence of idleness in another process.
+3. Verify the source rollout did not change during inspection. Use native `thread/fork` from the **latest automation thread**, pinned by `lastTurnId` to that completed turn, not from the older human seed.
+4. Require a new thread ID, unchanged code cwd, and an unchanged source rollout before submitting the new task. Unknown/active/incomplete histories remain blocked for inspection.
+5. Persist `<run>/THREAD_RECOVERY.json` (previous/current thread, anchor, cwd, original error, accepted-turn flag). Update only the automation binding after dispatch. Preserve the human thread, source history, and OS writer lock; never kill an external owner or delete a lock file.
+
+This is a continuation branch, not a lock release. Do not concurrently run manual edits against the same code scope from the retained Desktop conversation: a thread-store lock is not a cross-client filesystem transaction.
+
+Acceptance on 2026-10-03: Windows Restart Manager identified the existing Desktop `codex.exe` as holder of the 3D automation lock. Native read showed the final stored turn completed. The original projection-fix task was then dispatched via the continuation branch; `THREAD_RECOVERY.json` records `turn_started=true`, `lock_deleted=false`, and `old_owner_terminated=false`. The resulting run is execution evidence, not a claim that the projection fix or training has completed.
+
+Protocol reference: https://developers.openai.com/codex/app-server/ (`thread/read`, `thread/fork`, `lastTurnId`).
+
 ## What is canonical?
 
 The human thread remains the user's manual conversation. The automation thread is a worker execution history. Durable project truth does not rely on either chat: it is committed to `.project_memory`, reviewed by ChatGPT Web, and finalized through Project Room review/memory/cleanup gates.

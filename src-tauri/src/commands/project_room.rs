@@ -572,6 +572,14 @@ pub(super) fn dispatch_project_task_unlocked(
         return Err("当前只能直接 dispatch 给 Codex 或 Antigravity/Gemini；ChatGPT 由网页 Project Room 协调。".to_string());
     }
 
+    if let Some(active) = snapshot.runs.iter().find(|run| {
+        run.agent_id == agent_id && matches!(run.status.as_str(), "running" | "interactive")
+    }) {
+        return Err(format!(
+            "Agent {agent_id} already has managed run {} for {}; refusing duplicate dispatch",
+            active.id, active.task_id
+        ));
+    }
     ensure_dispatch_scope_is_safe(&snapshot, &task)?;
 
     let run_id = next_id(&format!("RUN-{}", agent_id.to_ascii_uppercase()));
