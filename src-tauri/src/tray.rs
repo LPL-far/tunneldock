@@ -108,6 +108,11 @@ pub(crate) fn setup(app: &mut App, lifecycle: Arc<CloseLifecycle>) -> tauri::Res
             if event.id() == SHOW_MENU_ID {
                 let _ = show_main_window(app);
             } else if event.id() == EXIT_MENU_ID {
+                if let Err(error) = crate::app_supervisor::request_exit(app) {
+                    eprintln!("Cannot record intentional desktop exit: {error}");
+                    let _ = app.emit("desktop-lifecycle-error", error);
+                    return;
+                }
                 menu_lifecycle.request_exit();
                 app.exit(0);
             }
@@ -160,7 +165,11 @@ pub(crate) fn resolve_close_request<R: Runtime>(
     lifecycle: State<'_, Arc<CloseLifecycle>>,
     action: String,
 ) -> Result<(), String> {
-    match lifecycle.finish_prompt(CloseAction::from_frontend_action(&action)) {
+    let action = CloseAction::from_frontend_action(&action);
+    if action == CloseAction::Exit {
+        crate::app_supervisor::request_exit(&app)?;
+    }
+    match lifecycle.finish_prompt(action) {
         CloseAction::Exit => app.exit(0),
         CloseAction::Hide => {
             if let Some(window) = app.get_webview_window("main") {
@@ -240,7 +249,13 @@ mod tests {
     fn frontend_actions_map_to_supported_close_actions() {
         assert_eq!(CloseAction::from_frontend_action("exit"), CloseAction::Exit);
         assert_eq!(CloseAction::from_frontend_action("hide"), CloseAction::Hide);
-        assert_eq!(CloseAction::from_frontend_action("cancel"), CloseAction::Cancel);
-        assert_eq!(CloseAction::from_frontend_action("unexpected"), CloseAction::Cancel);
+        assert_eq!(
+            CloseAction::from_frontend_action("cancel"),
+            CloseAction::Cancel
+        );
+        assert_eq!(
+            CloseAction::from_frontend_action("unexpected"),
+            CloseAction::Cancel
+        );
     }
 }

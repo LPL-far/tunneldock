@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { check, Update } from "@tauri-apps/plugin-updater";
+import { invoke } from "@tauri-apps/api/core";
 import { APP_VERSION } from "../version";
 
 export type UpdateStage =
@@ -178,6 +179,7 @@ export function useAppUpdater() {
     setDialogOpen(true);
     let downloaded = 0;
     let total: number | null = null;
+    let guardianSuspended = false;
 
     setState((prev) => ({
       ...prev,
@@ -234,6 +236,9 @@ export function useAppUpdater() {
       // Windows launches the installer and exits the application here. On macOS
       // and Linux the package is installed in-place and becomes active on the next
       // launch, so the UI transitions to `installed` if this call returns.
+      // The installer may terminate the app without running the UI exit callback.
+      await invoke("set_desktop_update_guard", { suspended: true });
+      guardianSuspended = true;
       await update.install({ restartAfterInstall: true });
 
       setState((prev) => ({
@@ -248,6 +253,14 @@ export function useAppUpdater() {
         errorMessage: `更新失败：${errorText(error)}`,
       }));
     } finally {
+      // Failed/cancelled installs must not silently leave recovery disabled.
+      if (guardianSuspended) {
+        try {
+          await invoke("set_desktop_update_guard", { suspended: false });
+        } catch (error) {
+          setState((prev) => ({ ...prev, stage: "error", errorMessage: `${prev.errorMessage ?? ""} 恢复主程序守护失败：${errorText(error)}` }));
+        }
+      }
       busyRef.current = false;
     }
   }, [checkForUpdates]);

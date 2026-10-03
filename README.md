@@ -216,3 +216,5 @@ tunneldock/
 <p align="center">
   <b>让 ChatGPT 安全、透明、可审计地触达你的本地项目。</b>
 </p>
+
+主程序独立运行、原生守护恢复、主动退出与 Codex writer ownership 接续规则，参见 [Desktop runtime recovery](docs/DESKTOP_RUNTIME_RECOVERY.md)。

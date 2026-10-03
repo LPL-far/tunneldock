@@ -2360,7 +2360,7 @@ fn dispatch_queued_tasks_unlocked(state: &AppState, project_id: &str) -> Result<
     let mut busy_agents = snapshot
         .runs
         .iter()
-        .filter(|run| run.status == "running")
+        .filter(|run| matches!(run.status.as_str(), "running" | "interactive"))
         .map(|run| run.agent_id.clone())
         .collect::<std::collections::HashSet<_>>();
     let mut dispatched = 0usize;

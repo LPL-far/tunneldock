@@ -73,7 +73,7 @@ impl AppState {
         }
     }
 
-    fn resolve_app_data_dir() -> PathBuf {
+    pub(crate) fn resolve_app_data_dir() -> PathBuf {
         let base_dir = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
         Self::resolve_app_data_dir_in(&base_dir)
     }
