@@ -6,6 +6,7 @@ import { readProjectHandoff } from '../../api';
 import { duration, phaseStep, reviewPrompt } from './activityModel';
 import { ContextEnginePanel } from './ContextEnginePanel';
 import { HandoffReader } from './HandoffReader';
+import { CampaignPanel } from './CampaignPanel';
 
 const button = 'inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-300 hover:border-sky-500 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:opacity-40';
 export function AgentActivityPanel({ data, error, cwd }: { data: ProjectActivity | null; error: string | null; cwd: string }) {
@@ -83,6 +84,7 @@ export function AgentActivityPanel({ data, error, cwd }: { data: ProjectActivity
     </div>
     {error && <div role="alert" className="my-2 text-xs text-amber-300" title={error}>{t('activity.sync_error')}</div>}
     <div className="mt-3 grid gap-3 xl:grid-cols-2">{data ? data.cards.map(card) : <p className="py-6 text-xs text-zinc-500">{t('activity.waiting')}</p>}</div>
+    {data && <CampaignPanel key={data.project_id} status={data.campaigns} projectId={data.project_id}/>}
     {data && data.pending_review_count > 0 && <div role="status" className="mt-3 rounded-lg border border-amber-900/50 bg-amber-950/15 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-medium text-amber-200">{t('activity.pending',{count:data.pending_review_count})}</span>
         <button className={button} onClick={() => void copy(reviewPrompt(cwd,data.pending_reviews,locale))}><Copy size={13}/>{t('activity.prompt')}</button></div>

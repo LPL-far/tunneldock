@@ -59,6 +59,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 use std::os::windows::process::CommandExt;
 
 pub mod activity;
+pub mod campaign;
 mod agent_worker;
 mod antigravity;
 mod codex;
@@ -582,6 +583,10 @@ pub(super) fn dispatch_project_task_unlocked(
             active.id, active.task_id
         ));
     }
+    campaign::allowed(state, project_id, &task)?;
+    if campaign::model::is_task(&task) && agent_id != task.owner {
+        return Err("Campaign dispatch must use the declared task owner".into());
+    }
     ensure_dispatch_scope_is_safe(&snapshot, &task)?;
 
     let run_id = next_id(&format!("RUN-{}", agent_id.to_ascii_uppercase()));
@@ -616,6 +621,7 @@ pub(super) fn dispatch_project_task_unlocked(
                 )
             })?;
         let automation_name = format!("[TunnelDock] {}", snapshot.config.name);
+        campaign::reserve(state, project_id, &task, &run_id)?;
         let dispatch = match codex::start_background_turn(
             &executable,
             source_thread_id,
@@ -650,6 +656,7 @@ pub(super) fn dispatch_project_task_unlocked(
             Some(dispatch.start_offset),
         )
     } else {
+        campaign::reserve(state, project_id, &task, &run_id)?;
         let binding = antigravity::resolve_cascade(
             &snapshot.config.local_root,
             snapshot.config.antigravity_cascade_id.as_deref(),
@@ -896,7 +903,9 @@ pub async fn project_session_supervisor_loop(app: AppHandle, state: Arc<AppState
 
         // Runs and inbox events are project-local coordination state. Process
         // them even when the TunnelDock window is hidden in the system tray.
-        let _ = reconcile_project_operational_state_once(&state);
+        if let Err(error) = reconcile_project_operational_state_once(&state) {
+            eprintln!("Project Room reconciliation failed: {error}");
+        }
         let _ = reconcile_project_sessions_once(app.clone(), state.clone()).await;
 
         // Quota probing can touch local agent runtimes and must not block Tauri's
@@ -1081,6 +1090,9 @@ pub fn upsert_project_task(
     let path = dir.join(TASKS_FILE);
     let mut tasks = read_json::<Vec<ProjectTask>>(&path)?;
 
+    if campaign::model::is_task(&task) || tasks.iter().any(|t| t.id == task.id && campaign::model::is_task(t)) {
+        return Err("Campaign tasks are immutable; use campaign controls".into());
+    }
     let now = local_now_rfc3339();
     let is_new = task.id.trim().is_empty();
     if is_new {

@@ -24,10 +24,20 @@ export interface AgentActivityCard {
   human_thread_id: string | null; automation_thread_id: string | null;
 }
 export interface ProjectActivity {
+  campaigns?: CampaignStatus;
   context_engine?: ContextEngineState;
   version: number; project_id: string; revision: string; sampled_at: string;
   cards: AgentActivityCard[]; pending_reviews: TaskActivity[]; pending_review_count: number;
 }
+export interface CampaignSummary {
+  id: string; plan_sha256: string; question: string; stage: string; state: string;
+  paused: boolean; active_drain: boolean; attempts: number; budget: number; deadline: string;
+  execution: string | null; evidence: string | null; gate: boolean | null; metric: number | null;
+  evidence_ids?: string[]; evidence_count?: number; room_enabled?: boolean; evidence_directory?: string; scientific_failures?: number;
+  web_reviewed: boolean; accepted: boolean; reason: string;
+  authorization_pending: boolean; next_owner: string; next_action: string;
+}
+export interface CampaignStatus { items: CampaignSummary[]; error?: string; revision?: number; total?: number; room_enabled?: boolean; counts?: Record<string, number>; detail_path?: string }
 export interface HandoffPage {
   run_id: string; path: string; offset: number; next_offset: number;
   total_bytes: number; complete: boolean; text: string;

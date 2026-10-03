@@ -34,6 +34,29 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// An inert test state: no user configuration, sessions or process cleanup is touched.
+    #[cfg(test)]
+    pub(crate) fn isolated_for_tests(app_data_dir: PathBuf) -> Self {
+        Self {
+            workspaces: Arc::new(Mutex::new(Vec::new())),
+            running_workspace_pids: Arc::new(Mutex::new(HashMap::new())),
+            running_workspace_stdins: Arc::new(Mutex::new(HashMap::new())),
+            running_agent_pids: Arc::new(Mutex::new(HashMap::new())),
+            otunnel_pid: Arc::new(Mutex::new(None)),
+            otunnel_owned_pid: Arc::new(Mutex::new(None)),
+            otunnel_health_url: Arc::new(Mutex::new(None)),
+            otunnel_health_url_file: Arc::new(Mutex::new(None)),
+            history: Arc::new(Mutex::new(Vec::new())),
+            settings: Arc::new(Mutex::new(TunnelSettings {
+                tunnel_id: String::new(), api_key: String::new(), key_file_path: String::new(),
+                health_port: 0, profile_name: String::new(), locale: "en".into(),
+            })),
+            project_store_lock: Arc::new(Mutex::new(())),
+            app_data_dir,
+            cleanup_started: AtomicBool::new(true),
+        }
+    }
+
     pub fn new() -> Self {
         let app_data_dir = Self::resolve_app_data_dir();
 

@@ -167,6 +167,10 @@ Use this only after the human researcher has made the final decision. Record the
 ## Delegation first
 For implementation, uploads, remote execution and repeatable experiment operations, use `tunneldock_delegate` with action=create, one stable request_id, an explicit completion goal and bounded write_scope. The tool submits to this scheduler and returns a real task/run receipt. On uncertain delivery retry the SAME request_id, never manufacture another task. Use action=status and `tunneldock_wait` for existing IDs. Web retains source/evidence review, user decisions and canonical-memory updates. When the extension is unavailable, submit the equivalent task.create inbox event; do not silently fall back to dozens of direct write/SSH calls. Explicit read-only diagnoses are allowed. A project execution policy can block direct code edits and known upload/remote-execution patterns; it is a workflow guard, not an arbitrary-shell sandbox.
 
+## Bounded auto-research campaigns
+Read `.tunneldock/CAMPAIGN_PROTOCOL.md` before proposing a multi-stage experiment. Submit `campaign.draft` with the complete frozen plan; drafting never authorizes or dispatches it. The human must inspect the exact plan hash, finite attempt budget and deadline in the Campaign panel before authorizing. This release executes local Codex stages only; do not silently route a campaign to SSH or a GPU server.
+Once authorized, the existing supervisor schedules only the approved stages. Do not create parallel task.create/revise loops for a campaign attempt. Scientific-negative results are evidence, not operational retry requests. Use the bounded `web_status.campaigns` summary for progress and the indicated detail source / Campaign inspect action for the full plan and ordered evidence IDs. Only after complete evidence review submit `campaign.reviewed` with campaign_id, plan_sha256, plan_version, the full ordered evidence_ids, review_ref and accepted. Read back the accepted review state; enqueueing a review is not final acceptance. Missing evidence, changed hashes, uncertain submission or exhausted budgets require an explicit decision, not a new hidden experiment.
+
 ## task.create
 Codex/Gemini tasks auto-dispatch by default when this event comes from the Web coordinator; set `auto_dispatch=false` only to intentionally create backlog. `review_mode=auto` is the default for deterministic execution work (implementation, bug fixes, cleanup, deterministic data preparation, launching/maintaining a run). Its worker handoff is evaluated by TunnelDock's strict local finalizer and may reach `completed` without waiting for a Web turn. Use `review_mode=web` for method choice, experiment interpretation, novelty/paper claims, accepting scientific conclusions, or any task where human/research judgment remains. If a non-consultation task is already awaiting Web review, TunnelDock rejects additional Web-created work unless the user explicitly requested parallel urgent work and the event sets `override_pending_actions=true`.
 ```json
@@ -788,7 +792,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         .collect::<Vec<_>>();
     let mut web_actions = Vec::new();
     for task in snapshot.tasks.iter().take(40) {
-        if task.kind == "consultation" {
+        if task.kind == "consultation" || super::campaign::model::is_task(task) {
             continue;
         }
         match task.status.as_str() {
@@ -871,6 +875,18 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             web_actions.push(action);
         }
     }
+    let campaigns = super::campaign::summary(&snapshot.config);
+    if let Some(error) = campaigns.get("error") {
+        web_actions.push(serde_json::json!({"priority": 1, "kind": "campaign_store_error", "error": error,
+            "instruction": "Campaign scheduling is blocked. Inspect the persisted campaign store error before any recovery."}));
+    }
+    for c in campaigns["items"].as_array().into_iter().flatten() {
+        if c["authorization_pending"] == true || c["state"] == "awaiting_web_review" {
+            web_actions.push(serde_json::json!({"priority": 10, "kind": "campaign_action", "campaign_id": c["id"],
+                "plan_sha256": c["plan_sha256"], "next_owner": c["next_owner"], "instruction": c["next_action"],
+                "protocol": "campaign.reviewed binds plan_version and evidence_ids; authorize only through the human panel. Never task.review/revise a campaign attempt."}));
+        }
+    }
     web_actions.sort_by_key(|action| {
         action
             .get("priority")
@@ -939,6 +955,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         })
         .collect::<Vec<_>>();
     let status_core = serde_json::json!({
+        "campaigns": &campaigns,
         "project_id": &snapshot.config.id,
         "session_binding": &session_binding,
         "memory_updated_at": &snapshot.memory.updated_at,
@@ -951,6 +968,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
     });
     let state_token = stable_state_token(&status_core);
     let web_status = serde_json::json!({
+        "campaigns": &campaigns,
         "project_id": &snapshot.config.id,
         "session_binding": &session_binding,
         "state_token": state_token,
@@ -974,6 +992,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
     });
 
     let web_context = serde_json::json!({
+        "campaigns": &campaigns,
         "config": &snapshot.config,
         "session_binding": &session_binding,
         "memory": {
@@ -1017,6 +1036,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             "full_snapshot": bridge_dir.join(BRIDGE_FILE),
             "inbox_protocol": bridge_dir.join(INBOX_PROTOCOL_FILE),
             "research_protocol": bridge_dir.join("RESEARCH_PROTOCOL.md"),
+            "campaign_protocol": bridge_dir.join("CAMPAIGN_PROTOCOL.md"),
             "run_root": bridge_dir.join(RUNS_DIR),
         },
         "web_budget": {
@@ -1035,6 +1055,12 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
     if fs::read_to_string(&protocol_path).ok().as_deref() != Some(protocol) {
         fs::write(&protocol_path, protocol)
             .map_err(|error| format!("Write Research Protocol failed: {error}"))?;
+    }
+    let campaign_protocol_path = bridge_dir.join("CAMPAIGN_PROTOCOL.md");
+    let campaign_protocol = include_str!("../../../../docs/AUTO_RESEARCH_CAMPAIGNS.md");
+    if fs::read_to_string(&campaign_protocol_path).ok().as_deref() != Some(campaign_protocol) {
+        fs::write(&campaign_protocol_path, campaign_protocol)
+            .map_err(|error| format!("Write Campaign Protocol failed: {error}"))?;
     }
     fs::write(bridge_dir.join(CONSTITUTION_FILE), project_constitution())
         .map_err(|error| format!("写入 Project Constitution 失败: {}", error))?;
@@ -1346,6 +1372,9 @@ pub(super) fn process_project_event_unlocked(
     let dir = project_dir(state, project_id)?;
     let now = local_now_rfc3339();
 
+    if kind.starts_with("campaign.") {
+        return super::campaign::process_event(state, project_id, value, false);
+    }
     match kind.as_str() {
         "discussion.post" => {
             let message = event_string(value, "message");
@@ -2026,7 +2055,11 @@ pub(super) fn process_project_event_unlocked(
             if author == "chatgpt" && !override_pending_actions {
                 let pending_reviews = tasks
                     .iter()
-                    .filter(|task| task.kind != "consultation" && task.status == "review")
+                    .filter(|task| {
+                        task.kind != "consultation"
+                            && task.status == "review"
+                            && !super::campaign::model::is_task(task)
+                    })
                     .map(|task| task.id.clone())
                     .take(6)
                     .collect::<Vec<_>>();
@@ -2124,6 +2157,9 @@ pub(super) fn process_project_event_unlocked(
                 .iter_mut()
                 .find(|task| task.id == task_id)
                 .ok_or_else(|| format!("task.review 找不到 {}", task_id))?;
+            if super::campaign::model::is_task(task) {
+                return Err("Use campaign.reviewed; campaign attempts cannot be revised or accepted by task.review".into());
+            }
             if task.kind == "consultation" {
                 return Err("task.review 不用于 consultation；请使用 consult.reviewed".to_string());
             }
@@ -2438,6 +2474,14 @@ fn dispatch_queued_tasks_unlocked(state: &AppState, project_id: &str) -> Result<
         if busy_agents.contains(&owner) {
             continue;
         }
+        if let Some(task) = snapshot.tasks.iter().find(|t| t.id == task_id) {
+            if super::campaign::model::is_task(task)
+                && (super::campaign::allowed(state, project_id, task).is_err()
+                    || ensure_dispatch_scope_is_safe(&snapshot, task).is_err())
+            {
+                continue;
+            }
+        }
         match dispatch_project_task_unlocked(state, project_id, &task_id, &owner) {
             Ok(_) => {
                 busy_agents.insert(owner.clone());
@@ -2488,19 +2532,26 @@ fn dispatch_queued_tasks_unlocked(state: &AppState, project_id: &str) -> Result<
 pub(super) fn reconcile_project_operational_state_once(
     state: &Arc<AppState>,
 ) -> Result<(), String> {
-    let _guard = state.project_store_lock.lock();
-    let ids = ensure_store(state)?;
-
+    let ids = {
+        let _guard = state.project_store_lock.lock();
+        ensure_store(state)?
+    };
+    for project_id in &ids {
+        let _guard = state.project_store_lock.lock();
+        let _ = refresh_run_states_unlocked(state, project_id);
+        let _ = process_project_inbox_unlocked(state, project_id);
+    }
+    // Campaign provenance/evidence verification owns no global store lock.
+    let campaign_result = super::campaign::reconcile_once(state, &ids);
     for project_id in ids {
-        let _ = refresh_run_states_unlocked(state, &project_id);
-        let _ = process_project_inbox_unlocked(state, &project_id);
+        let _guard = state.project_store_lock.lock();
         let _ = dispatch_queued_tasks_unlocked(state, &project_id);
         if let Ok(snapshot) = load_snapshot_unlocked(state, &project_id) {
             let _ = sync_project_bridge(&snapshot);
         }
     }
 
-    Ok(())
+    campaign_result
 }
 
 #[cfg(test)]
@@ -2761,6 +2812,20 @@ mod tests {
 
 #[cfg(test)]
 mod research_protocol_tests {
+    #[test]
+    fn generated_inbox_exposes_bounded_campaign_review_without_authorizing() {
+        let inbox = super::inbox_protocol();
+        assert!(inbox.contains("CAMPAIGN_PROTOCOL.md"));
+        assert!(inbox.contains("drafting never authorizes or dispatches"));
+        assert!(inbox.contains("local Codex stages only"));
+        assert!(inbox.contains("Scientific-negative results are evidence"));
+        assert!(inbox.contains("enqueueing a review is not final acceptance"));
+        let protocol = include_str!("../../../../docs/AUTO_RESEARCH_CAMPAIGNS.md");
+        assert!(protocol.contains("campaign.draft"));
+        assert!(protocol.contains("campaign.reviewed"));
+        assert!(protocol.contains("No real research plan was authorized"));
+    }
+
     #[test]
     fn generated_guidance_preserves_evidence_and_review_boundaries() {
         let constitution = super::project_constitution();

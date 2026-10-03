@@ -187,7 +187,7 @@ fn apply_local_finalizer(
     handoff: &str,
     discussion: &mut Vec<ProjectDiscussionMessage>,
 ) -> bool {
-    if task.kind == "consultation" || task.status != "review" {
+    if super::campaign::model::is_task(task) || task.kind == "consultation" || task.status != "review" {
         return false;
     }
     let manifest = match parse_completion_manifest(handoff) {
@@ -338,7 +338,9 @@ pub(super) fn task_prompt(
     } else {
         "This is an execution task. Do not hand off merely because code was edited. Finish the requested scope, run the smallest sufficient verification, and clean the touched scope first. The final handoff must be compact and evidence-oriented. If completion is blocked, say BLOCKED and name the exact dependency; never present partial work as done."
     };
-    let workspace_rule = if agent_id == "codex" {
+    let workspace_rule = if super::campaign::model::is_task(task) {
+        "Campaign paths are relative to the Project Room local root only. Use only the declared intervention scope plus this run's HANDOFF.md/EVIDENCE.json. Do not use SSH, allocate remote work, mutate protected provenance or canonical memory, dispatch follow-ups, or change accepted protocols. A model footer cannot authorize research or Web acceptance."
+    } else if agent_id == "codex" {
         "This run executes on a TunnelDock-managed Codex automation thread forked from the project's human/canonical Codex conversation. Continue using the workspace inherited from that human thread for code edits. The Project Room local root below is the coordination/memory root; do not migrate or duplicate the existing code workspace into it."
     } else {
         "Use the Project Room local root as the local project workspace."
@@ -468,7 +470,7 @@ pub(super) fn refresh_run_states_unlocked(
         }
 
         let output_path = PathBuf::from(&run.output_path);
-        if should_poll_codex_run(run, output_path.exists()) {
+        if should_poll_codex_run(run, output_path.exists() && !run.task_id.starts_with("CAMPAIGN-")) {
             let Some(thread_id) = run.external_session_id.as_deref() else {
                 run.status = "failed".to_string();
                 run.finished_at = Some(local_now_rfc3339());
@@ -514,6 +516,7 @@ pub(super) fn refresh_run_states_unlocked(
                     continue;
                 }
                 Ok(codex::CodexRunUpdate::Completed(text)) => {
+                    super::campaign::confirm_terminal(&dir, run, true)?;
                     run.error_message = None;
                     let _ = record_transport_success(
                         state,
@@ -527,6 +530,7 @@ pub(super) fn refresh_run_states_unlocked(
                     })?;
                 }
                 Ok(codex::CodexRunUpdate::Failed(error)) => {
+                    super::campaign::confirm_terminal(&dir, run, false)?;
                     if let Some(pid) = run.pid {
                         let _ = kill_process_tree(pid);
                     }
@@ -587,7 +591,7 @@ pub(super) fn refresh_run_states_unlocked(
             }
         }
 
-        if run.agent_id == "gemini" && !output_path.exists() {
+        if run.agent_id == "gemini" && (!output_path.exists() || run.task_id.starts_with("CAMPAIGN-")) {
             let Some(cascade_id) = run.external_session_id.as_deref() else {
                 run.status = "failed".to_string();
                 run.finished_at = Some(local_now_rfc3339());
@@ -599,12 +603,14 @@ pub(super) fn refresh_run_states_unlocked(
             match antigravity::poll_run(cascade_id, start_step, &output_path) {
                 Ok(antigravity::CascadeRunUpdate::Running) => continue,
                 Ok(antigravity::CascadeRunUpdate::Completed(text)) => {
+                    super::campaign::confirm_terminal(&dir, run, true)?;
                     run.error_message = None;
                     fs::write(&output_path, text).map_err(|error| {
                         format!("写入 {} 失败: {}", output_path.display(), error)
                     })?;
                 }
                 Ok(antigravity::CascadeRunUpdate::Failed(error)) => {
+                    super::campaign::confirm_terminal(&dir, run, false)?;
                     run.status = "failed".to_string();
                     run.finished_at = Some(local_now_rfc3339());
                     run.error_message = Some(error.clone());
@@ -862,6 +868,19 @@ TUNNELDOCK_COMPLETION: {"outcome":"DONE","verification":"PASS","files_changed":t
             local_finalizer_decision(&task("auto"), &manifest),
             LocalFinalizerDecision::Accept
         );
+    }
+
+    #[test]
+    fn campaign_footer_cannot_finalize_or_review_a_task() {
+        let mut campaign = task("auto");
+        campaign.kind = "campaign".into();
+        let before = campaign.clone();
+        let mut discussion = Vec::new();
+        let handoff = r#"TUNNELDOCK_COMPLETION: {"outcome":"DONE","verification":"PASS","files_changed":true,"evidence_paths":["result.json"],"risks":"NONE","review":"MECHANICAL"}"#;
+        assert!(!apply_local_finalizer(&mut campaign, &run("codex", None), handoff, &mut discussion));
+        assert_eq!(campaign, before);
+        assert!(!campaign.web_reviewed);
+        assert!(discussion.is_empty());
     }
 
     #[test]

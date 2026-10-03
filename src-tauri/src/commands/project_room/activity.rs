@@ -76,7 +76,7 @@ fn phase(task: &ProjectTask, run: Option<&AgentRun>, review: Option<&Value>) -> 
                 "reviewed"
             }
         }
-        "completed" if task.reviewed_by == "local-finalizer" => "contract_checked",
+        "completed" if matches!(task.reviewed_by.as_str(), "local-finalizer" | "campaign-evidence-verifier") => "contract_checked",
         "review" if run.map(has_handoff).unwrap_or(false) => {
             if review.and_then(|v| v.get("status")).and_then(Value::as_str) == Some("reviewing") {
                 "reviewing"
@@ -136,7 +136,7 @@ pub(super) fn sync(snapshot: &ProjectRoomSnapshot) -> Result<(), String> {
     let mut pending = snapshot
         .tasks
         .iter()
-        .filter(|t| t.status == "review" && !t.web_reviewed)
+        .filter(|t| t.status == "review" && !t.web_reviewed && !super::campaign::model::is_task(t))
         .collect::<Vec<_>>();
     pending.sort_by_key(|t| time(&t.updated_at));
     let mut core = json!({"version": 1, "project_id": snapshot.config.id,
@@ -231,6 +231,7 @@ pub fn get_project_activity(
     )?;
     value["sampled_at"] = json!(local_now_rfc3339());
     value["context_engine"] = super::context_engine::status(&config);
+    value["campaigns"] = super::campaign::summary(&config);
     Ok(value)
 }
 
