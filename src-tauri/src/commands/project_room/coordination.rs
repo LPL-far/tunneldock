@@ -29,6 +29,11 @@ This project is optimized for top-conference research, not product feature accum
 - Prefer one focused consultation round over open-ended agent-to-agent chatting. Start another round only when a concrete unresolved question remains.
 - Throughput rule: clear `web_status.actions` before scheduling more work. A worker handoff is not task completion. `review_mode=auto` work may reach `completed` only when the strict local completion manifest says DONE + PASS + MECHANICAL + no risks + tangible persisted output/evidence; otherwise it is blocked or deferred to Web. `review_mode=web` always requires ChatGPT review.
 
+## Explicit wait-and-review requests
+- When the user asks to wait for Codex/Gemini and receive a reviewed answer (rather than a status update), use the native `tunneldock_wait` tool with exact current task IDs and a bounded wait of up to 90 seconds. This overrides the default 20-second status-only polling guidance. Do not create duplicate tasks or paste repeated snapshots while waiting.
+- On `ready_for_review`, continue in the SAME active Web turn: confirm latest run IDs, submit `review.started`, read every complete handoff in bounded pages and inspect decisive source/tests, then submit `task.review` or `consult.reviewed` and report the reviewed conclusion. A receipt is not an acceptance.
+- Timeout/connection loss leaves the task and receipt on disk, not cancelled. The desktop panel keeps receiving results; an inactive browser cannot be awakened by this tool. If the new native tool is not loaded in an existing Pi session, use the same helper via its existing bash tool: `node ~/.pi/agent/extensions/tunneldock-wait.ts --td-wait '{"task_ids":["TASK-..."],"max_wait_seconds":60}'` from that project's cwd (the local Node 26 runtime supports this). This path needs no session restart. Do not claim that an installed extension is already loaded or that it can wake an inactive browser.
+
 ## Review and decision rules
 - Gemini modifications to core model/training/data code require Codex review before acceptance.
 - Important Codex algorithm changes require ChatGPT review for research intent and methodological consistency.

@@ -61,14 +61,26 @@ pub(super) fn persist_durable_session_hint(
 }
 
 fn install_project_flow_guard() -> Result<(), String> {
-    let root = dirs::home_dir().ok_or("Cannot locate Pi extension directory")?.join(".pi/agent/extensions");
+    let root = dirs::home_dir()
+        .ok_or("Cannot locate Pi extension directory")?
+        .join(".pi/agent/extensions");
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    let path = root.join("tunneldock-flow.ts");
-    let source = include_str!("../../../pi-extensions/tunneldock-flow.ts");
-    if fs::read_to_string(&path).ok().as_deref() != Some(source) {
-        let temporary = path.with_extension("ts.tmp");
-        fs::write(&temporary, source).map_err(|e| e.to_string())?;
-        fs::rename(temporary, path).map_err(|e| e.to_string())?;
+    for (name, source) in [
+        (
+            "tunneldock-flow.ts",
+            include_str!("../../../pi-extensions/tunneldock-flow.ts"),
+        ),
+        (
+            "tunneldock-wait.ts",
+            include_str!("../../../pi-extensions/tunneldock-wait.ts"),
+        ),
+    ] {
+        let path = root.join(name);
+        if fs::read_to_string(&path).ok().as_deref() != Some(source) {
+            let temporary = path.with_extension("ts.tmp");
+            fs::write(&temporary, source).map_err(|e| e.to_string())?;
+            fs::rename(temporary, path).map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }

@@ -28,6 +28,14 @@ For consultations use the existing `consult.reviewed` and required durable gates
 
 Automatic **receipt** works while the ChatGPT page is not generating. Actual Web review still needs an active ChatGPT execution. TunnelDock has no supported API in this integration to wake or finish another inactive ChatGPT browser reply. This limitation is displayed, not hidden by calling a worker's completion "Web-reviewed". The panel preserves results across browser disconnects and makes the outstanding review visible without repeatedly asking for status.
 
+## Waiting and reviewing within an active Web turn
+
+`pi-extensions/tunneldock-wait.ts` registers `tunneldock_wait(task_ids, max_wait_seconds)` (1–8 exact task IDs, 0–90 seconds; default 60). It reads persisted project state without creating tasks, invoking a model, or printing repeated logs. For an explicit “wait for Codex/Gemini, review, then reply” request, this replaces the default 20-second status-only polling loop. On `ready_for_review`, the same active Web turn must read complete handoffs in bounded pages, verify decisive evidence, and submit the normal review receipt before reporting a conclusion.
+
+Queued revisions suppress previous handoffs. All requested workers must have a current completed run and non-empty handoff; blocked/failed/superseded cases return an explicit non-success. Timeout or user cancellation does not cancel the worker. The tool does not mark any work reviewed or awaken an inactive browser. Existing running sessions must load the new native tool through a safe extension reload/restart; availability must be checked, not inferred from the installed file. To avoid interrupting those sessions, the SAME TypeScript implementation has a Node CLI entry: from the project cwd, run `node ~/.pi/agent/extensions/tunneldock-wait.ts --td-wait '{"task_ids":["TASK-..."],"max_wait_seconds":60}'` through the existing bash tool. This is verified on the local Node 26 runtime and requires no Pi restart. It is not a second waiting implementation.
+
+Native acceptance: on an isolated Pi session, a completed fixture returned `ready_for_review` with its exact run/handoff path; requeueing the same task with the old handoff still present returned timeout with `run_id=null`, `handoff=null`. Neither path altered review state. The fixture is temporary and is not a research result.
+
 ## Output backpressure
 
 `pi-extensions/tunneldock-flow.ts` hooks Pi's `tool_result` contract. Only a session with an exact-cwd `.tunneldock/session_binding.json` is affected. Text beyond 8192 UTF-8 bytes is stored intact under `.tunneldock/output_cache/<sha256>.txt`; the returned excerpt carries its path and explicitly says it is partial. Images and the original error flag are retained. Oversized metadata is stored separately. Identical text is content-addressed, not copied per poll. Storage failure returns an explicit error and warns against rerunning a possibly already-executed write.
