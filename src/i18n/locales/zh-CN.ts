@@ -145,6 +145,8 @@ export const zhCN = {
     quota_limiting: "当前限制",
     dispatch_codex: "交给 Codex",
     dispatch_gemini: "交给 Gemini",
+    review_mode_auto: "本地快速验收",
+    review_mode_web: "网页科研审核",
     worker_not_found: "未检测到本地 worker",
     latest_handoff: "最近 Handoff",
     keep_session_alive: "后台保持该项目 Pi Session",

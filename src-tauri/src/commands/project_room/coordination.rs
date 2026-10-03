@@ -27,7 +27,7 @@ This project is optimized for top-conference research, not product feature accum
 - For multi-agent consultation, never synthesize while `ready_for_review=false`. `review_only` consultation finalizes after `consult.reviewed`; `durable` consultation additionally requires canonical memory commit and cleanup. Once ready, read `web_context.json` and every successful worker handoff in full, then report only consensus, disagreement, decisive evidence, and next action. Preserve full worker evidence in Project Room state instead of repeating it in chat.
 - After reading all settled worker evidence and completing its own review, ChatGPT must emit `consult.reviewed`. `review_only` consultation finalizes there. `durable` consultation must then update canonical project memory / emit `memory.commit`, perform cleanup/integration / emit `cleanup.commit`, and reach `finalized`. If a worker failed/blocked, report it as missing evidence rather than inventing consensus.
 - Prefer one focused consultation round over open-ended agent-to-agent chatting. Start another round only when a concrete unresolved question remains.
-- Throughput rule: clear `web_status.actions` before scheduling more work. A worker handoff is not task completion; non-consultation work reaches `completed` only after ChatGPT emits `task.review=accept` based on a real completed run + handoff + decisive verification.
+- Throughput rule: clear `web_status.actions` before scheduling more work. A worker handoff is not task completion. `review_mode=auto` work may reach `completed` only when the strict local completion manifest says DONE + PASS + MECHANICAL + no risks + tangible persisted output/evidence; otherwise it is blocked or deferred to Web. `review_mode=web` always requires ChatGPT review.
 
 ## Review and decision rules
 - Gemini modifications to core model/training/data code require Codex review before acceptance.
@@ -148,7 +148,7 @@ Use this only after the human researcher has made the final decision. Record the
 ```
 
 ## task.create
-Codex/Gemini tasks auto-dispatch by default when this event comes from the Web coordinator; set `auto_dispatch=false` only to intentionally create backlog. If a non-consultation task is already awaiting Web review, TunnelDock rejects additional Web-created work unless the user explicitly requested parallel urgent work and the event sets `override_pending_actions=true`.
+Codex/Gemini tasks auto-dispatch by default when this event comes from the Web coordinator; set `auto_dispatch=false` only to intentionally create backlog. `review_mode=auto` is the default for deterministic execution work (implementation, bug fixes, cleanup, deterministic data preparation, launching/maintaining a run). Its worker handoff is evaluated by TunnelDock's strict local finalizer and may reach `completed` without waiting for a Web turn. Use `review_mode=web` for method choice, experiment interpretation, novelty/paper claims, accepting scientific conclusions, or any task where human/research judgment remains. If a non-consultation task is already awaiting Web review, TunnelDock rejects additional Web-created work unless the user explicitly requested parallel urgent work and the event sets `override_pending_actions=true`.
 ```json
 {
   "kind": "task.create",
@@ -158,7 +158,8 @@ Codex/Gemini tasks auto-dispatch by default when this event comes from the Web c
   "owner": "codex",
   "reviewers": ["chatgpt"],
   "write_scope": ["model/decoder/**"],
-  "auto_dispatch": true
+  "auto_dispatch": true,
+  "review_mode": "auto"
 }
 ```
 
@@ -174,7 +175,7 @@ Codex/Gemini tasks auto-dispatch by default when this event comes from the Web c
 ```
 
 ## task.review
-ChatGPT Web uses this to close a non-consultation work task after personally checking the handoff and decisive source/test evidence. `accept` requires a real completed worker run and non-empty HANDOFF; `revise` requeues the same task with the review summary fed into the next worker attempt; `block` stops it with an explicit reason; `supersede` closes an obsolete review/blocked/backlog item so stale work does not remain pending forever.
+ChatGPT Web uses this only for non-consultation work that the local finalizer deferred (or tasks explicitly created with `review_mode=web`). Every worker run may write `<run>/FINALIZER.json`: `accept` means the strict mechanical contract was satisfied locally; `defer_web` gives the reason Web judgment is still required; `block` records a worker-reported blocker or failed verification. ChatGPT closes deferred work after personally checking the handoff and decisive source/test evidence. `accept` requires a real completed worker run and non-empty HANDOFF; `revise` requeues the same task with the review summary fed into the next worker attempt; `block` stops it with an explicit reason; `supersede` closes an obsolete review/blocked/backlog item so stale work does not remain pending forever.
 ```json
 {
   "kind": "task.review",
@@ -204,7 +205,7 @@ Rules:
 - Do not edit `project_room.json` directly; it is generated state.
 - Do not use this inbox as a raw chat dump. Post only decisions, disagreements, review requests, handoffs, and reproducible evidence that another agent needs.
 - `consult.request` is read-only by default. Keep each worker's final answer under 1200 characters. `finalization=review_only` is the default for advisory analysis and finalizes immediately after `consult.reviewed`; use `finalization=durable` only when the consultation changes canonical project truth/results and therefore requires memory + cleanup. TunnelDock assigns one `consultation_id` to the whole round. Poll `.tunneldock/web_status.json` for the barrier; `web_context.json` is detail-on-demand.
-- At the start of every web turn, process `web_status.json.actions` in priority order before creating more work. A `review_task` action must end in `task.review` accept/revise/block/supersede; old `dispatch_backlog` items must be explicitly dispatched or superseded instead of silently accumulating. ChatGPT must not synthesize or recommend from partial results. Poll `web_status.json` for no more than 5 cycles / about 20 seconds in one browser turn. If unchanged, emit only a compact checkpoint and let the next user turn resume from `state_token`. If `state=invalid_handoff`, send one `consult.retry` for the listed `invalid_handoffs`. Once `ready_for_review=true`, read `web_context.json` and every successful full handoff, perform your own review, and write `consult.reviewed`. For `review_only`, that finalizes the consultation. For `durable`, then update canonical memory/write `memory.commit`, perform cleanup/integration/write `cleanup.commit`, and wait until state=`finalized` before the final human-facing analysis.
+- At the start of every web turn, process `web_status.json.actions` in priority order before creating more work. Mechanical `review_mode=auto` work may already have been closed by the local finalizer; a remaining `review_task` therefore represents a deferred/Web-judgment case and must end in `task.review` accept/revise/block/supersede; old `dispatch_backlog` items must be explicitly dispatched or superseded instead of silently accumulating. ChatGPT must not synthesize or recommend from partial results. Poll `web_status.json` for no more than 5 cycles / about 20 seconds in one browser turn. If unchanged, emit only a compact checkpoint and let the next user turn resume from `state_token`. If `state=invalid_handoff`, send one `consult.retry` for the listed `invalid_handoffs`. Once `ready_for_review=true`, read `web_context.json` and every successful full handoff, perform your own review, and write `consult.reviewed`. For `review_only`, that finalizes the consultation. For `durable`, then update canonical memory/write `memory.commit`, perform cleanup/integration/write `cleanup.commit`, and wait until state=`finalized` before the final human-facing analysis.
 - If the two agents materially disagree, ChatGPT may issue one focused follow-up `consult.request` with the same `thread_id`. The follow-up gets a new `consultation_id`, so it has its own barrier. Avoid recursive debate unless the user explicitly asks for it.
 - Before asking the human to decide a code/method question, ChatGPT must personally inspect the relevant diff or source files and surface only the decisive code-review points; worker handoffs are evidence, not a substitute for review.
 - `decision.record` is written only after the human researcher explicitly decides. Keep it concise and durable; never record an unresolved recommendation as a decision.
@@ -515,6 +516,8 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
                 "cleanup_committed": task.cleanup_committed,
                 "auto_dispatch": task.auto_dispatch,
                 "finalization_policy": task.finalization_policy,
+                "review_mode": task.review_mode,
+                "reviewed_by": task.reviewed_by,
                 "created_at": task.created_at,
                 "updated_at": task.updated_at,
             })
@@ -733,6 +736,8 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
                 "id": task.get("id"),
                 "owner": task.get("owner"),
                 "status": task.get("status"),
+                "review_mode": task.get("review_mode"),
+                "reviewed_by": task.get("reviewed_by"),
                 "updated_at": task.get("updated_at"),
             })
         })
@@ -769,14 +774,20 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
                     .iter()
                     .find(|run| run.task_id == task.id)
                     .map(|run| run.output_path.clone());
+                let finalizer_path = handoff_path
+                    .as_ref()
+                    .and_then(|path| Path::new(path).parent())
+                    .map(|parent| parent.join("FINALIZER.json"));
                 web_actions.push(serde_json::json!({
                     "priority": 10,
                     "kind": "review_task",
                     "task_id": task.id,
                     "title": task.title,
                     "owner": task.owner,
+                    "review_mode": task.review_mode,
                     "handoff_path": handoff_path,
-                    "instruction": "Inspect the handoff and decisive source/test evidence, then emit task.review with accept/revise/block/supersede."
+                    "finalizer_path": finalizer_path,
+                    "instruction": "Local finalizer deferred this task or review_mode=web. Inspect the handoff, FINALIZER.json when present, and decisive source/test evidence, then emit task.review with accept/revise/block/supersede."
                 }));
             }
             "blocked" | "failed" => web_actions.push(serde_json::json!({
@@ -857,6 +868,24 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
     let blocked_count = work_count("blocked");
     let failed_count = work_count("failed");
     let completed_count = work_count("completed");
+    let local_finalized_count = snapshot
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.kind != "consultation"
+                && task.status == "completed"
+                && task.reviewed_by == "local-finalizer"
+        })
+        .count();
+    let web_finalized_count = snapshot
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.kind != "consultation"
+                && task.status == "completed"
+                && task.reviewed_by == "chatgpt"
+        })
+        .count();
     let completion_debt = backlog_count + review_count + blocked_count + failed_count;
     let throughput = serde_json::json!({
         "backlog": backlog_count,
@@ -866,6 +895,8 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "blocked": blocked_count,
         "failed": failed_count,
         "completed": completed_count,
+        "local_finalized": local_finalized_count,
+        "web_finalized": web_finalized_count,
         "completion_debt": completion_debt,
         "action_count": web_actions.len(),
     });
@@ -1537,6 +1568,7 @@ pub(super) fn process_project_event_unlocked(
             for index in member_indexes {
                 tasks[index].status = "completed".to_string();
                 tasks[index].web_reviewed = true;
+                tasks[index].reviewed_by = "chatgpt".to_string();
                 tasks[index].memory_committed = false;
                 tasks[index].cleanup_committed = false;
                 tasks[index].updated_at = now.clone();
@@ -1871,6 +1903,8 @@ pub(super) fn process_project_event_unlocked(
                         cleanup_committed: false,
                         auto_dispatch: true,
                         finalization_policy: finalization_policy.clone(),
+                        review_mode: "web".to_string(),
+                        reviewed_by: String::new(),
                         created_at: now.clone(),
                         updated_at: now.clone(),
                     },
@@ -1944,6 +1978,21 @@ pub(super) fn process_project_event_unlocked(
                 .get("auto_dispatch")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(matches!(owner.as_str(), "codex" | "gemini"));
+            let review_mode = {
+                let requested = event_string(value, "review_mode");
+                match requested.as_str() {
+                    "auto" => "auto".to_string(),
+                    "web" => "web".to_string(),
+                    "" if matches!(owner.as_str(), "codex" | "gemini") => "auto".to_string(),
+                    "" => "web".to_string(),
+                    other => {
+                        return Err(format!(
+                            "task.create review_mode 不支持: {} (仅支持 auto/web)",
+                            other
+                        ))
+                    }
+                }
+            };
             tasks.insert(
                 0,
                 ProjectTask {
@@ -1974,6 +2023,8 @@ pub(super) fn process_project_event_unlocked(
                     cleanup_committed: false,
                     auto_dispatch,
                     finalization_policy: "work".to_string(),
+                    review_mode,
+                    reviewed_by: String::new(),
                     created_at: now.clone(),
                     updated_at: now,
                 },
@@ -2029,11 +2080,13 @@ pub(super) fn process_project_event_unlocked(
                     task.status = "completed".to_string();
                     task.auto_dispatch = false;
                     task.web_reviewed = true;
+                    task.reviewed_by = "chatgpt".to_string();
                 }
                 "revise" => {
                     task.status = "queued".to_string();
                     task.auto_dispatch = matches!(task.owner.as_str(), "codex" | "gemini");
                     task.web_reviewed = false;
+                    task.reviewed_by.clear();
                     task.memory_committed = false;
                     task.cleanup_committed = false;
                 }
@@ -2041,11 +2094,13 @@ pub(super) fn process_project_event_unlocked(
                     task.status = "blocked".to_string();
                     task.auto_dispatch = false;
                     task.web_reviewed = true;
+                    task.reviewed_by = "chatgpt".to_string();
                 }
                 "supersede" => {
                     task.status = "superseded".to_string();
                     task.auto_dispatch = false;
                     task.web_reviewed = true;
+                    task.reviewed_by = "chatgpt".to_string();
                 }
                 _ => unreachable!(),
             }
@@ -2406,6 +2461,8 @@ mod tests {
             cleanup_committed: false,
             auto_dispatch: true,
             finalization_policy: "durable".to_string(),
+            review_mode: "web".to_string(),
+            reviewed_by: String::new(),
             created_at: "2026-10-01T22:00:00+08:00".to_string(),
             updated_at: "2026-10-01T22:00:00+08:00".to_string(),
         }

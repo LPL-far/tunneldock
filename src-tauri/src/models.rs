@@ -206,6 +206,10 @@ fn default_task_finalization_policy() -> String {
     "durable".to_string()
 }
 
+fn default_task_review_mode() -> String {
+    "web".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectTask {
     pub id: String,
@@ -232,6 +236,10 @@ pub struct ProjectTask {
     pub auto_dispatch: bool,
     #[serde(default = "default_task_finalization_policy")]
     pub finalization_policy: String,
+    #[serde(default = "default_task_review_mode")]
+    pub review_mode: String,
+    #[serde(default)]
+    pub reviewed_by: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -459,6 +467,8 @@ mod tests {
         assert!(!task.cleanup_committed);
         assert!(!task.auto_dispatch);
         assert_eq!(task.finalization_policy, "durable");
+        assert_eq!(task.review_mode, "web");
+        assert!(task.reviewed_by.is_empty());
 
         let config: ProjectRoomConfig = serde_json::from_str(
             r#"{

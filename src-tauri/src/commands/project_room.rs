@@ -1077,12 +1077,21 @@ pub fn upsert_project_task(
         if task.finalization_policy.trim().is_empty() {
             task.finalization_policy = "work".to_string();
         }
+        if task.review_mode.trim().is_empty() {
+            task.review_mode = if matches!(task.owner.as_str(), "codex" | "gemini") {
+                "auto".to_string()
+            } else {
+                "web".to_string()
+            };
+        }
+        task.reviewed_by.clear();
         if matches!(task.owner.as_str(), "codex" | "gemini") {
             if task.auto_dispatch {
                 task.status = "queued".to_string();
             }
         } else {
             task.auto_dispatch = false;
+            task.review_mode = "web".to_string();
             task.status = "backlog".to_string();
         }
     }
@@ -1283,7 +1292,7 @@ Research operating rules:
 - Important Codex algorithm changes require ChatGPT methodological review.
 - You and the other agents may discuss and challenge each other; I remain the final decision maker.
 
-Before allocating new work, clear the highest-priority `web_status.actions`: review completed worker tasks with `task.review`, retry invalid consultations, and resolve stale blocked/backlog items. Only then inspect current tasks, capacity, experiments, and discussion and allocate new work. A worker handoff is not completion: accept a work task only after verifying a real completed run, non-empty handoff, decisive source/diff, and focused verification evidence."#,
+Before allocating new work, clear the highest-priority `web_status.actions`: review deferred worker tasks with `task.review`, retry invalid consultations, and resolve stale blocked/backlog items. Then inspect current tasks, capacity, experiments, and discussion. For deterministic execution work (implementation, bug fixing, cleanup, deterministic data preparation, launching/maintaining runs), create `task.create` with `review_mode=auto`; TunnelDock may finalize it locally only under the strict completion manifest. For method choice, experiment interpretation, novelty/paper claims, accepting scientific conclusions, or any consequential judgment, use `review_mode=web`. A worker handoff by itself is never completion."#,
             name = snapshot.config.name,
             id = snapshot.config.id,
             local = snapshot.config.local_root,
@@ -1339,7 +1348,7 @@ TunnelDock workspace ID：{workspace}
 - Codex 的重要算法改动需要 ChatGPT 做科研意图和方法一致性 review。
 - 三个 Agent 可以互相讨论、质疑和反驳；我始终是最终研究决策者。
 
-创建新任务前，必须先清空最高优先级 `web_status.actions`：review 已完成 worker task（写 `task.review`）、重试 invalid consultation、处理 stale blocked/backlog。然后再看 tasks/capacity/experiments/discussion 并分配新工作。worker handoff 不等于完成；只有确认真实 completed run、非空 handoff、决定性源码/diff 与 focused verification 后，才能 `task.review=accept`。"#,
+创建新任务前，必须先清空最高优先级 `web_status.actions`：review 被本地 finalizer defer 的 worker task（写 `task.review`）、重试 invalid consultation、处理 stale blocked/backlog。然后再看 tasks/capacity/experiments/discussion。实现、修 bug、清理、确定性数据准备、启动/维持训练或评测等机械执行任务，`task.create` 使用 `review_mode=auto`，TunnelDock 仅在严格 completion manifest 通过时本地 finalize；方法选择、实验解释、novelty/paper claim、是否接受科学结论等必须使用 `review_mode=web`。worker handoff 本身永远不等于完成。"#,
             name = snapshot.config.name,
             id = snapshot.config.id,
             local = snapshot.config.local_root,

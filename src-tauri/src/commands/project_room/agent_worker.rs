@@ -38,6 +38,244 @@ pub(super) fn scopes_conflict(left: &[String], right: &[String]) -> bool {
     })
 }
 
+const COMPLETION_PREFIX: &str = "TUNNELDOCK_COMPLETION:";
+
+#[derive(Debug, Clone, serde::Deserialize, Serialize, PartialEq)]
+struct CompletionManifest {
+    outcome: String,
+    verification: String,
+    #[serde(default)]
+    files_changed: bool,
+    #[serde(default)]
+    evidence_paths: Vec<String>,
+    risks: String,
+    review: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum LocalFinalizerDecision {
+    Accept,
+    Block(String),
+    Defer(String),
+}
+
+fn parse_completion_manifest(text: &str) -> Result<CompletionManifest, String> {
+    let line = text
+        .lines()
+        .rev()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_prefix(COMPLETION_PREFIX)
+                .map(str::trim)
+                .filter(|payload| !payload.is_empty())
+        })
+        .ok_or_else(|| "missing TUNNELDOCK_COMPLETION footer".to_string())?;
+    serde_json::from_str::<CompletionManifest>(line)
+        .map_err(|error| format!("invalid TUNNELDOCK_COMPLETION JSON: {error}"))
+}
+
+fn task_requires_web_judgment(task: &ProjectTask, manifest: &CompletionManifest) -> Option<String> {
+    let research_text = format!("{} {}", task.title, task.goal).to_ascii_lowercase();
+    for keyword in [
+        "architecture",
+        "algorithm",
+        "method",
+        "loss",
+        "objective",
+        "ablation",
+        "novelty",
+        "paper",
+        "hypothesis",
+        "scientific conclusion",
+        "research direction",
+    ] {
+        if research_text.contains(keyword) {
+            return Some(format!(
+                "research-sensitive keyword '{}' requires Web review",
+                keyword
+            ));
+        }
+    }
+
+    if task.owner == "gemini" && manifest.files_changed {
+        let visual_only = !task.write_scope.is_empty()
+            && task.write_scope.iter().all(|scope| {
+                let scope = scope.to_ascii_lowercase();
+                [
+                    "visual", "figure", "plot", "pca", "video", "ui", "asset", "docs", "report",
+                ]
+                .iter()
+                .any(|safe| scope.contains(safe))
+            });
+        if !visual_only {
+            return Some("Gemini non-visual code change requires Codex/Web review".to_string());
+        }
+    }
+    None
+}
+
+fn local_finalizer_decision(
+    task: &ProjectTask,
+    manifest: &CompletionManifest,
+) -> LocalFinalizerDecision {
+    let outcome = manifest.outcome.trim().to_ascii_uppercase();
+    let verification = manifest.verification.trim().to_ascii_uppercase();
+    let risks = manifest.risks.trim().to_ascii_uppercase();
+    let review = manifest.review.trim().to_ascii_uppercase();
+
+    if outcome == "BLOCKED" || verification == "FAIL" {
+        return LocalFinalizerDecision::Block(format!(
+            "worker outcome={}, verification={}",
+            outcome, verification
+        ));
+    }
+    if outcome != "DONE" {
+        return LocalFinalizerDecision::Defer(format!(
+            "unsupported outcome {}; Web review required",
+            outcome
+        ));
+    }
+    if task.review_mode != "auto" {
+        return LocalFinalizerDecision::Defer("task review_mode=web".to_string());
+    }
+    if let Some(reason) = task_requires_web_judgment(task, manifest) {
+        return LocalFinalizerDecision::Defer(reason);
+    }
+    if verification != "PASS" {
+        return LocalFinalizerDecision::Defer(format!("verification={} is not PASS", verification));
+    }
+    if risks != "NONE" {
+        return LocalFinalizerDecision::Defer(format!("risks={} requires Web judgment", risks));
+    }
+    if review != "MECHANICAL" {
+        return LocalFinalizerDecision::Defer(format!("review={} requires Web judgment", review));
+    }
+    if !manifest.files_changed && manifest.evidence_paths.is_empty() {
+        return LocalFinalizerDecision::Defer(
+            "no changed files or evidence paths to audit".to_string(),
+        );
+    }
+    LocalFinalizerDecision::Accept
+}
+
+fn write_finalizer_record(
+    run: &AgentRun,
+    task: &ProjectTask,
+    manifest: Option<&CompletionManifest>,
+    decision: &str,
+    reason: &str,
+) {
+    let Some(parent) = Path::new(&run.output_path).parent() else {
+        return;
+    };
+    let record = serde_json::json!({
+        "run_id": run.id,
+        "task_id": task.id,
+        "review_mode": task.review_mode,
+        "decision": decision,
+        "reason": reason,
+        "manifest": manifest,
+        "updated_at": local_now_rfc3339(),
+    });
+    let _ = write_json(&parent.join("FINALIZER.json"), &record);
+}
+
+fn apply_local_finalizer(
+    task: &mut ProjectTask,
+    run: &AgentRun,
+    handoff: &str,
+    discussion: &mut Vec<ProjectDiscussionMessage>,
+) -> bool {
+    if task.kind == "consultation" || task.status != "review" {
+        return false;
+    }
+    let manifest = match parse_completion_manifest(handoff) {
+        Ok(manifest) => manifest,
+        Err(reason) => {
+            if task.review_mode == "auto" {
+                write_finalizer_record(run, task, None, "defer_web", &reason);
+            }
+            return false;
+        }
+    };
+    let decision = local_finalizer_decision(task, &manifest);
+    let thread_id = if task.thread_id.is_empty() {
+        task.id.clone()
+    } else {
+        task.thread_id.clone()
+    };
+    match decision {
+        LocalFinalizerDecision::Accept => {
+            task.status = "completed".to_string();
+            task.auto_dispatch = false;
+            task.reviewed_by = "local-finalizer".to_string();
+            task.updated_at = local_now_rfc3339();
+            let reason = "strict completion contract passed: DONE + PASS + MECHANICAL + NONE";
+            write_finalizer_record(run, task, Some(&manifest), "accept", reason);
+            discussion.insert(
+                0,
+                ProjectDiscussionMessage {
+                    id: next_id("MSG"),
+                    thread_id,
+                    author: "local-finalizer".to_string(),
+                    recipients: vec!["chatgpt".to_string()],
+                    message: format!("Auto-finalized {}: {}", task.id, reason),
+                    created_at: local_now_rfc3339(),
+                },
+            );
+            true
+        }
+        LocalFinalizerDecision::Block(reason) => {
+            task.status = "blocked".to_string();
+            task.auto_dispatch = false;
+            task.reviewed_by = "local-finalizer".to_string();
+            task.updated_at = local_now_rfc3339();
+            write_finalizer_record(run, task, Some(&manifest), "block", &reason);
+            discussion.insert(
+                0,
+                ProjectDiscussionMessage {
+                    id: next_id("MSG"),
+                    thread_id,
+                    author: "local-finalizer".to_string(),
+                    recipients: vec!["chatgpt".to_string()],
+                    message: format!("Blocked {} from completion manifest: {}", task.id, reason),
+                    created_at: local_now_rfc3339(),
+                },
+            );
+            true
+        }
+        LocalFinalizerDecision::Defer(reason) => {
+            write_finalizer_record(run, task, Some(&manifest), "defer_web", &reason);
+            false
+        }
+    }
+}
+
+fn normalize_finalized_consultation_tasks(tasks: &mut [ProjectTask]) -> bool {
+    let mut changed = false;
+    for task in tasks {
+        if task.kind != "consultation"
+            || !matches!(task.status.as_str(), "review" | "blocked" | "failed")
+            || !task.web_reviewed
+        {
+            continue;
+        }
+        let lifecycle_done = task.finalization_policy == "review_only"
+            || (task.memory_committed && task.cleanup_committed);
+        if lifecycle_done {
+            task.status = "completed".to_string();
+            task.auto_dispatch = false;
+            if task.reviewed_by.is_empty() {
+                task.reviewed_by = "chatgpt".to_string();
+            }
+            task.updated_at = local_now_rfc3339();
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub(super) fn run_dir(config: &ProjectRoomConfig, run_id: &str) -> PathBuf {
     PathBuf::from(&config.local_root)
         .join(BRIDGE_DIR)
@@ -112,6 +350,7 @@ pub(super) fn task_prompt(
 Role: {role}
 Task ID: {task_id}
 Task: {title}
+Review mode: {review_mode}
 Goal / completion criteria:
 {goal}
 {retry_context}
@@ -147,12 +386,23 @@ Your final response must be a concise handoff with:
 8. Requested review: the smallest decisive thing the reviewer must check
 9. Memory/experiment updates that should be made
 
+For non-consultation execution tasks, append ONE final machine-readable line exactly in this form:
+TUNNELDOCK_COMPLETION: {{"outcome":"DONE","verification":"PASS","files_changed":true,"evidence_paths":["path/to/evidence"],"risks":"NONE","review":"MECHANICAL"}}
+Contract rules:
+- outcome=BLOCKED unless the requested scope is actually complete.
+- verification=PASS only when the stated current-tree checks really passed; use FAIL or NOT_RUN otherwise.
+- files_changed=true only for real persisted edits; evidence_paths must list real reviewable artifacts/results/logs and may be empty only when files_changed=true.
+- risks=NONE only when no unresolved correctness/blocker remains. If experiment interpretation, novelty, method choice, scientific acceptance, or another human judgment remains, use PRESENT.
+- review=MECHANICAL only when the remaining review is deterministic correctness/evidence checking. Use WEB for method/experiment interpretation, acceptance of a scientific conclusion, or any consequential judgment.
+- Never claim MECHANICAL merely to get auto-finalized.
+
 {handoff_delivery}
 "#,
         agent = agent_id,
         project = snapshot.config.name,
         role = role,
         task_id = task.id,
+        review_mode = task.review_mode,
         title = task.title,
         goal = task.goal,
         retry_context = retry_context,
@@ -432,6 +682,7 @@ pub(super) fn refresh_run_states_unlocked(
                 let handoff = text.chars().take(limit).collect::<String>();
                 if let Some(task) = tasks.iter_mut().find(|task| task.id == run.task_id) {
                     task.status = "review".to_string();
+                    task.reviewed_by.clear();
                     task.summary = handoff.clone();
                     task.updated_at = local_now_rfc3339();
                     discussion.insert(
@@ -453,6 +704,7 @@ pub(super) fn refresh_run_states_unlocked(
                             created_at: local_now_rfc3339(),
                         },
                     );
+                    let _ = apply_local_finalizer(task, run, &text, &mut discussion);
                 }
             } else {
                 run.status = "failed".to_string();
@@ -485,6 +737,10 @@ pub(super) fn refresh_run_states_unlocked(
             }
             changed = true;
         }
+    }
+
+    if normalize_finalized_consultation_tasks(&mut tasks) {
+        changed = true;
     }
 
     if changed {
@@ -525,8 +781,14 @@ pub(super) fn ensure_dispatch_scope_is_safe(
 
 #[cfg(test)]
 mod tests {
-    use super::should_poll_codex_run;
-    use crate::models::AgentRun;
+    use super::{
+        apply_local_finalizer, local_finalizer_decision, normalize_finalized_consultation_tasks,
+        parse_completion_manifest, should_poll_codex_run, CompletionManifest,
+        LocalFinalizerDecision,
+    };
+    use crate::models::{AgentRun, ProjectDiscussionMessage, ProjectTask};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn run(agent_id: &str, pid: Option<u32>) -> AgentRun {
         AgentRun {
@@ -547,6 +809,31 @@ mod tests {
         }
     }
 
+    fn task(review_mode: &str) -> ProjectTask {
+        ProjectTask {
+            id: "TASK-1".to_string(),
+            title: "Mechanical implementation".to_string(),
+            goal: "Implement and verify".to_string(),
+            owner: "codex".to_string(),
+            reviewers: vec!["chatgpt".to_string()],
+            status: "review".to_string(),
+            write_scope: vec!["src/**".to_string()],
+            summary: String::new(),
+            kind: "work".to_string(),
+            thread_id: String::new(),
+            consultation_id: String::new(),
+            web_reviewed: false,
+            memory_committed: false,
+            cleanup_committed: false,
+            auto_dispatch: true,
+            finalization_policy: "work".to_string(),
+            review_mode: review_mode.to_string(),
+            reviewed_by: String::new(),
+            created_at: "2026-10-03T10:00:00+08:00".to_string(),
+            updated_at: "2026-10-03T10:00:00+08:00".to_string(),
+        }
+    }
+
     #[test]
     fn background_codex_run_with_pid_is_still_polled() {
         let background = run("codex", Some(4242));
@@ -558,5 +845,139 @@ mod tests {
 
         let gemini = run("gemini", Some(4242));
         assert!(!should_poll_codex_run(&gemini, false));
+    }
+
+    #[test]
+    fn strict_completion_footer_parses_and_auto_accepts_mechanical_work() {
+        let text = r#"handoff
+TUNNELDOCK_COMPLETION: {"outcome":"DONE","verification":"PASS","files_changed":true,"evidence_paths":["tests/report.json"],"risks":"NONE","review":"MECHANICAL"}"#;
+        let manifest = parse_completion_manifest(text).expect("valid completion footer");
+        assert_eq!(manifest.outcome, "DONE");
+        assert_eq!(
+            local_finalizer_decision(&task("auto"), &manifest),
+            LocalFinalizerDecision::Accept
+        );
+    }
+
+    #[test]
+    fn finalizer_defers_scientific_or_web_review() {
+        let manifest = CompletionManifest {
+            outcome: "DONE".to_string(),
+            verification: "PASS".to_string(),
+            files_changed: true,
+            evidence_paths: vec!["result.json".to_string()],
+            risks: "PRESENT".to_string(),
+            review: "WEB".to_string(),
+        };
+        assert!(matches!(
+            local_finalizer_decision(&task("auto"), &manifest),
+            LocalFinalizerDecision::Defer(_)
+        ));
+        let safe = CompletionManifest {
+            risks: "NONE".to_string(),
+            review: "MECHANICAL".to_string(),
+            ..manifest
+        };
+        assert!(matches!(
+            local_finalizer_decision(&task("web"), &safe),
+            LocalFinalizerDecision::Defer(_)
+        ));
+    }
+
+    #[test]
+    fn local_finalizer_writes_audit_record_and_completes_task() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tunneldock-finalizer-{nonce}"));
+        fs::create_dir_all(&root).expect("temp dir");
+        let output = root.join("HANDOFF.md");
+        let text = r#"1. Outcome: DONE
+4. Verification: cargo test passed
+TUNNELDOCK_COMPLETION: {"outcome":"DONE","verification":"PASS","files_changed":true,"evidence_paths":["tests/report.json"],"risks":"NONE","review":"MECHANICAL"}"#;
+        fs::write(&output, text).expect("handoff");
+
+        let mut work = task("auto");
+        let mut completed_run = run("codex", None);
+        completed_run.status = "completed".to_string();
+        completed_run.output_path = output.to_string_lossy().to_string();
+        let mut discussion = Vec::<ProjectDiscussionMessage>::new();
+        assert!(apply_local_finalizer(
+            &mut work,
+            &completed_run,
+            text,
+            &mut discussion
+        ));
+        assert_eq!(work.status, "completed");
+        assert_eq!(work.reviewed_by, "local-finalizer");
+        assert_eq!(discussion[0].author, "local-finalizer");
+        let audit: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join("FINALIZER.json")).expect("finalizer record"),
+        )
+        .expect("valid finalizer json");
+        assert_eq!(audit["decision"], "accept");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn research_sensitive_task_is_never_auto_accepted() {
+        let manifest = CompletionManifest {
+            outcome: "DONE".to_string(),
+            verification: "PASS".to_string(),
+            files_changed: true,
+            evidence_paths: vec!["evidence.json".to_string()],
+            risks: "NONE".to_string(),
+            review: "MECHANICAL".to_string(),
+        };
+        let mut research = task("auto");
+        research.title = "Implement new architecture operator".to_string();
+        assert!(matches!(
+            local_finalizer_decision(&research, &manifest),
+            LocalFinalizerDecision::Defer(_)
+        ));
+    }
+
+    #[test]
+    fn finalizer_blocks_reported_blocker_or_failed_verification() {
+        let blocked = CompletionManifest {
+            outcome: "BLOCKED".to_string(),
+            verification: "NOT_RUN".to_string(),
+            files_changed: false,
+            evidence_paths: Vec::new(),
+            risks: "PRESENT".to_string(),
+            review: "WEB".to_string(),
+        };
+        assert!(matches!(
+            local_finalizer_decision(&task("auto"), &blocked),
+            LocalFinalizerDecision::Block(_)
+        ));
+        let failed = CompletionManifest {
+            outcome: "DONE".to_string(),
+            verification: "FAIL".to_string(),
+            files_changed: true,
+            evidence_paths: Vec::new(),
+            risks: "NONE".to_string(),
+            review: "MECHANICAL".to_string(),
+        };
+        assert!(matches!(
+            local_finalizer_decision(&task("auto"), &failed),
+            LocalFinalizerDecision::Block(_)
+        ));
+    }
+
+    #[test]
+    fn stale_finalized_consultation_no_longer_holds_review_lock() {
+        let mut consultation = task("web");
+        consultation.kind = "consultation".to_string();
+        consultation.status = "review".to_string();
+        consultation.web_reviewed = true;
+        consultation.finalization_policy = "durable".to_string();
+        consultation.memory_committed = true;
+        consultation.cleanup_committed = true;
+        let mut tasks = vec![consultation];
+        assert!(normalize_finalized_consultation_tasks(&mut tasks));
+        assert_eq!(tasks[0].status, "completed");
+        assert_eq!(tasks[0].reviewed_by, "chatgpt");
     }
 }

@@ -75,6 +75,8 @@ const emptyTask = (): ProjectTask => ({
   cleanup_committed: false,
   auto_dispatch: true,
   finalization_policy: "work",
+  review_mode: "auto",
+  reviewed_by: "",
   created_at: "",
   updated_at: "",
 });

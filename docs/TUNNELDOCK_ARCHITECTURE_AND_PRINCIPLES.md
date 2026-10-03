@@ -246,6 +246,35 @@ web_status.actions / ChatGPT Web review
 
 这套规则的目标是提高 **completed throughput**，而不是提高“同时挂起的任务数”。
 
+#### Event-driven Local Finalizer
+为消除 `worker completed -> 等 Web 下一轮` 这一小时级关键路径，Project Room 增加事件驱动 Local Finalizer。Supervisor 仍按约 4 秒周期刷新 worker 状态；一旦非 consultation run 产生 HANDOFF，TunnelDock 立即解析最后一行严格 JSON completion manifest，而不是等待浏览器 stream：
+
+```text
+worker run completed
+    ↓
+HANDOFF.md + TUNNELDOCK_COMPLETION footer
+    ↓
+Local Finalizer
+    ├─ DONE + PASS + MECHANICAL + risks=NONE + tangible output
+    │      → completed (reviewed_by=local-finalizer)
+    │      → 同一 supervisor cycle 释放 write scope
+    │      → 下一 queued task 可继续 dispatch
+    ├─ BLOCKED / verification=FAIL
+    │      → blocked
+    └─ manifest 缺失 / review=WEB / risks present / research-sensitive task
+           → review → web_status.actions → ChatGPT Web
+```
+
+任务新增 `review_mode`：
+- `auto`：实现、修 bug、清理、确定性数据准备、启动/维持训练或评测等机械可验收工作；新 Codex/Gemini work task 默认如此。
+- `web`：architecture/method/algorithm/loss/objective/ablation/novelty/paper/hypothesis、实验解释、科学结论等必须由 Web 做研究判断的工作；consultation 固定为 Web review。
+
+Local Finalizer 还有双重 fail-closed：即使任务误标为 `auto`，研究敏感关键词仍强制 defer；Gemini 修改非 visual/figure/plot/PCA/video/UI/assets/docs/report 范围的代码也强制 defer，遵守“Gemini core changes require Codex/Web review”。
+
+每次本地判定写入对应 `.tunneldock/runs/<run_id>/FINALIZER.json`，记录 manifest、decision、reason、时间；`web_status.throughput` 同时暴露 `local_finalized` 与 `web_finalized`，用于量化本地闭环实际节省的 Web 等待。缺失或不满足 contract 的旧 handoff 不会被猜测式通过，只会继续留在 `review`。
+
+另外，已 `web_reviewed` 且生命周期已经完成的历史 consultation 会自动归一成 `completed`，避免旧 `review/blocked` 状态继续占 write-scope 锁。
+
 #### 自动化绑定提示词生成（Prompt Generation）
 为了减少用户在网页端的繁琐配置，TunnelDock 支持一键生成与 ChatGPT 绑定的系统级指令提示词：
 ```text

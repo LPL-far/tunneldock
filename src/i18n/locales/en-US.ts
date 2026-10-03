@@ -147,6 +147,8 @@ export const enUS: TranslationSchema = {
     quota_limiting: "Limiting",
     dispatch_codex: "Dispatch Codex",
     dispatch_gemini: "Dispatch Gemini",
+    review_mode_auto: "Local fast review",
+    review_mode_web: "Web research review",
     worker_not_found: "Local worker not detected",
     latest_handoff: "Latest Handoff",
     keep_session_alive: "Keep Project Pi Session Alive",

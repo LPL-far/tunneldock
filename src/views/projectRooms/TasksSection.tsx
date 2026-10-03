@@ -57,7 +57,7 @@ export const TasksSection: React.FC<Props> = ({
           rows={3}
           className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-200 outline-none"
         />
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <select
             value={taskDraft.owner}
             onChange={(event) =>
@@ -69,6 +69,16 @@ export const TasksSection: React.FC<Props> = ({
             <option value="gemini">Gemini</option>
             <option value="chatgpt">ChatGPT</option>
             <option value="user">User</option>
+          </select>
+          <select
+            value={taskDraft.review_mode || "auto"}
+            onChange={(event) =>
+              onTaskDraftChange({ ...taskDraft, review_mode: event.target.value })
+            }
+            className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-200"
+          >
+            <option value="auto">{t("project_rooms.review_mode_auto")}</option>
+            <option value="web">{t("project_rooms.review_mode_web")}</option>
           </select>
           <input
             value={taskScope}
@@ -103,6 +113,16 @@ export const TasksSection: React.FC<Props> = ({
               {task.kind === "consultation" && (
                 <span className="rounded bg-sky-950/50 px-1.5 py-0.5 text-[10px] text-sky-400">
                   consult
+                </span>
+              )}
+              {task.kind !== "consultation" && (
+                <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] text-zinc-500">
+                  review:{task.review_mode || "web"}
+                </span>
+              )}
+              {task.reviewed_by && (
+                <span className="rounded bg-emerald-950/40 px-1.5 py-0.5 text-[10px] text-emerald-400">
+                  by:{task.reviewed_by}
                 </span>
               )}
             </div>

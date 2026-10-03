@@ -159,6 +159,8 @@ export interface ProjectTask {
   cleanup_committed: boolean;
   auto_dispatch: boolean;
   finalization_policy: string;
+  review_mode: string;
+  reviewed_by: string;
   created_at: string;
   updated_at: string;
 }
