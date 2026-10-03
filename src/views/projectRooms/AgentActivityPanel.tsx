@@ -84,14 +84,14 @@ export function AgentActivityPanel({ data, error, cwd }: { data: ProjectActivity
     </div>
     {error && <div role="alert" className="my-2 text-xs text-amber-300" title={error}>{t('activity.sync_error')}</div>}
     <div className="mt-3 grid gap-3 xl:grid-cols-2">{data ? data.cards.map(card) : <p className="py-6 text-xs text-zinc-500">{t('activity.waiting')}</p>}</div>
-    {data && <CampaignPanel key={data.project_id} status={data.campaigns} projectId={data.project_id}/>}
+    {data && <CampaignPanel key={`campaign:${data.project_id}`} status={data.campaigns} projectId={data.project_id}/>}
     {data && data.pending_review_count > 0 && <div role="status" className="mt-3 rounded-lg border border-amber-900/50 bg-amber-950/15 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-medium text-amber-200">{t('activity.pending',{count:data.pending_review_count})}</span>
         <button className={button} onClick={() => void copy(reviewPrompt(cwd,data.pending_reviews,locale))}><Copy size={13}/>{t('activity.prompt')}</button></div>
       {data.pending_reviews.slice(0,3).map(task => <div key={task.task_id} className="mt-2 flex items-center justify-between gap-2 text-xs text-zinc-400"><span className="truncate">{task.agent_id} · {task.title}</span><span className="shrink-0 font-mono text-amber-400/80">{duration(task.received_at,now)}</span></div>)}
     </div>}
     <p className="mt-3 text-[11px] leading-5 text-zinc-500">{t('activity.boundary')}</p>
-    {data && <ContextEnginePanel key={data.project_id} state={data.context_engine} cwd={cwd} projectId={data.project_id} now={now}/>}
+    {data && <ContextEnginePanel key={`context:${data.project_id}`} state={data.context_engine} cwd={cwd} projectId={data.project_id} now={now}/>}
     {notice && <p role="status" className="mt-2 break-words text-xs text-sky-300">{notice}</p>}
     {selected && <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-950 p-4">
       <div className="flex justify-between gap-3"><h4 className="text-sm text-zinc-100">{selected.title}</h4><button aria-label={t('activity.close')} className="text-zinc-400 hover:text-white" onClick={() => { request.current++; setSelected(null); }}><X size={17}/></button></div>
