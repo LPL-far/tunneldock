@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, lstatSy
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { receipts } from './tunneldock-wait';
 interface Input { action:'create'|'status'; request_id:string; title?:string; goal?:string; owner?:'codex'|'gemini'; write_scope?:string[]; review_mode?:'web'|'auto' }
 const idPattern=/^[a-zA-Z0-9_-]{1,80}$/;
 function json(path:string){return JSON.parse(readFileSync(path,'utf8'));}
@@ -57,7 +58,8 @@ export default function(pi:ExtensionAPI) {
    while(!task && Date.now()<until && !signal?.aborted){await new Promise(r=>setTimeout(r,400));task=find();const errorPath=join(ctx.cwd,'.tunneldock/inbox_error.json');if(existsSync(errorPath)){const e=json(errorPath);if(String(e.file).includes('delegate-'+p.request_id+'.json'))throw Error(String(e.error));}}
   }
   const runs=json(join(store,'runs.json'));const run=task?runs.filter((r:any)=>r.task_id===task.id).sort((a:any,b:any)=>Date.parse(b.started_at)-Date.parse(a.started_at))[0]:null;
-  const result={project_id:b.project_id,request_id:p.request_id,task_id:task?.id??null,status:task?.status??'submission_unconfirmed',run_id:run?.id??null,run_status:run?.status??null,handoff:run?.status==='completed'?run.output_path:null,error:task?.status==='blocked'?String(task.summary||run?.error_message||'').slice(0,600):null,next_action:task?.status==='blocked'?'Resolve the recorded blocker before waiting; no running task is implied.':task?'Wait for this task, then review its current run evidence.':'Keep this request_id. Inspect rejection/transport; do not submit a new task ID.'};
+  const receipt=task?receipts({tasks:[task],runs},[task.id])[0]:null;
+  const result={project_id:b.project_id,request_id:p.request_id,task_id:task?.id??null,status:task?.status??'submission_unconfirmed',run_id:receipt?.run_id??null,run_status:receipt?.run_id?run?.status??null:null,handoff:receipt?.handoff??null,error:task?.status==='blocked'?String(task.summary||run?.error_message||''):null,next_action:task?.status==='blocked'?'Resolve the recorded blocker before waiting; no running task is implied.':task?'Wait for this task, then review its current run evidence.':'Keep this request_id. Inspect rejection/transport; do not submit a new task ID.'};
   return {content:[{type:'text' as const,text:JSON.stringify(result)}],details:{project_id:b.project_id,read_only:p.action==='status'}};
  }});
 }
