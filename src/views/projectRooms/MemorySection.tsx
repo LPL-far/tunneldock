@@ -2,10 +2,12 @@ import React from "react";
 import { Save } from "lucide-react";
 import { MemoryHealth, ProjectMemory } from "../../types";
 import { useTranslation } from "../../i18n";
+import type { AutoCompactionState } from '../../types/activity';
 
 interface Props {
   draft: ProjectMemory;
   health: MemoryHealth;
+  compaction?: AutoCompactionState;
   busy: boolean;
   onChange: (memory: ProjectMemory) => void;
   onSave: () => void;
@@ -14,11 +16,13 @@ interface Props {
 export const MemorySection: React.FC<Props> = ({
   draft,
   health,
+  compaction,
   busy,
   onChange,
   onSave,
 }) => {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
+  const zh = locale.startsWith('zh');
 
   const editors: Array<[keyof ProjectMemory, string, number]> = [
     ["project_state", t("project_rooms.project_state"), 12],
@@ -72,6 +76,11 @@ export const MemorySection: React.FC<Props> = ({
               : t("project_rooms.memory_healthy")}
           </span>
         </div>
+        {compaction?.enabled && <p role="status" className="mt-2 text-[11px] leading-5 text-zinc-400">
+          {zh ? '自动无损归档已启用。超限文件会自动分卷；完整原文、反证与约束保留在哈希归档，审核时仍须展开。' : 'Automatic lossless archival enabled. Over-budget files are paged; original evidence and constraints remain in hashed archives and must be expanded for review.'}
+          {' '}{compaction.state || compaction.phase || (zh ? '等待检查' : 'Awaiting check')}
+          {compaction.error && <span className="ml-2 text-amber-300">{compaction.error}</span>}
+        </p>}
         <div className="mt-3 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
           {health.files.map((file) => (
             <div key={file.file} className="rounded-md border border-zinc-900 bg-black/20 px-2 py-1.5">

@@ -564,6 +564,7 @@ export const ProjectRoomsView: React.FC = () => {
                 <MemorySection
                   draft={memoryDraft}
                   health={room.memory_health}
+                  compaction={activity?.context_engine?.auto_compaction}
                   busy={busy}
                   onChange={setMemoryDraft}
                   onSave={() => void saveMemory()}

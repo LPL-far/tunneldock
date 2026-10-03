@@ -164,6 +164,9 @@ Use this only after the human researcher has made the final decision. Record the
 }
 ```
 
+## Delegation first
+For implementation, uploads, remote execution and repeatable experiment operations, use `tunneldock_delegate` with action=create, one stable request_id, an explicit completion goal and bounded write_scope. The tool submits to this scheduler and returns a real task/run receipt. On uncertain delivery retry the SAME request_id, never manufacture another task. Use action=status and `tunneldock_wait` for existing IDs. Web retains source/evidence review, user decisions and canonical-memory updates. When the extension is unavailable, submit the equivalent task.create inbox event; do not silently fall back to dozens of direct write/SSH calls. Explicit read-only diagnoses are allowed. A project execution policy can block direct code edits and known upload/remote-execution patterns; it is a workflow guard, not an arbitrary-shell sandbox.
+
 ## task.create
 Codex/Gemini tasks auto-dispatch by default when this event comes from the Web coordinator; set `auto_dispatch=false` only to intentionally create backlog. `review_mode=auto` is the default for deterministic execution work (implementation, bug fixes, cleanup, deterministic data preparation, launching/maintaining a run). Its worker handoff is evaluated by TunnelDock's strict local finalizer and may reach `completed` without waiting for a Web turn. Use `review_mode=web` for method choice, experiment interpretation, novelty/paper claims, accepting scientific conclusions, or any task where human/research judgment remains. If a non-consultation task is already awaiting Web review, TunnelDock rejects additional Web-created work unless the user explicitly requested parallel urgent work and the event sets `override_pending_actions=true`.
 ```json
@@ -1988,6 +1991,34 @@ pub(super) fn process_project_event_unlocked(
 
             let path = dir.join(TASKS_FILE);
             let mut tasks = read_json::<Vec<ProjectTask>>(&path)?;
+            // A lost browser response must not create a second execution.
+            let request_id = event_string(value, "request_id");
+            if !request_id.is_empty() {
+                if request_id.len() > 80
+                    || !request_id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                {
+                    return Err("Invalid delegation request_id".into());
+                }
+                let key = format!("DELEGATE-{}", request_id);
+                if event_string(value, "thread_id") != key {
+                    return Err("Delegation thread_id must match request_id".into());
+                }
+                if let Some(existing) = tasks.iter().find(|task| task.thread_id == key) {
+                    if existing.title != title
+                        || existing.goal != event_string(value, "goal")
+                        || existing.owner != owner
+                        || existing.write_scope != event_string_array(value, "write_scope")
+                        || existing.review_mode != event_string(value, "review_mode")
+                    {
+                        return Err(
+                            "Delegation request_id was already used for different work".into()
+                        );
+                    }
+                    return Ok(());
+                }
+            }
             let override_pending_actions = value
                 .get("override_pending_actions")
                 .and_then(serde_json::Value::as_bool)

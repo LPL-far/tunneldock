@@ -38,6 +38,7 @@ fn default_memory_index(config: &ProjectRoomConfig) -> String {
 This directory stores decisions, current truth, and indexes — not large assets. Datasets, checkpoints, videos, figures, raw logs, PDFs, and generated artifacts stay in stable project/native locations. Record their path, version/hash, provenance, and evidence status here instead of copying them into `.project_memory`.
 
 ## Memory lifecycle
+- When automatic compaction is enabled, an over-budget file may begin with a `TunnelDock required-continuation` notice. Its hash-addressed archive and recursive manifest are REQUIRED canonical continuation, not obsolete facts. Expand every referenced original before decisive review or changing behavior. Context search includes these continuations; the first page alone is incomplete.
 - Root canonical Markdown files are the bounded **current materialized view**. They contain only facts/constraints/evidence that are useful now.
 - `archive/` keeps superseded or cold research history that still has scientific value. Archive history may grow; it is never injected by default.
 - `ledger/YYYY-MM.jsonl` is an append-only audit/event stream for memory commits, decisions, compaction and cleanup milestones.
@@ -585,11 +586,57 @@ pub(super) fn load_project_memory(config: &ProjectRoomConfig) -> Result<ProjectM
     })
 }
 
+struct CanonicalWriteLease {
+    path: PathBuf,
+    token: String,
+}
+impl CanonicalWriteLease {
+    fn acquire(root: &Path) -> Result<Self, String> {
+        let path = root.join(".tunneldock/memory-compaction.lock");
+        fs::create_dir_all(path.parent().ok_or("Missing lease parent")?)
+            .map_err(|e| e.to_string())?;
+        let token = format!(
+            "web-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| {
+                format!("Canonical memory is busy; retry after compaction/writer completes: {e}")
+            })?;
+        use std::io::Write;
+        let value = serde_json::json!({"pid":std::process::id(),"token":token});
+        file.write_all(value.to_string().as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        Ok(Self { path, token })
+    }
+}
+impl Drop for CanonicalWriteLease {
+    fn drop(&mut self) {
+        let owned = fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v["token"].as_str().map(str::to_owned))
+            .as_deref()
+            == Some(&self.token);
+        if owned {
+            if let Err(error) = fs::remove_file(&self.path) {
+                eprintln!("Memory lease cleanup failed: {error}");
+            }
+        }
+    }
+}
+
 pub(super) fn save_project_memory(
     config: &ProjectRoomConfig,
     memory: &ProjectMemory,
 ) -> Result<(), String> {
     ensure_project_memory(config)?;
+    let _lease = CanonicalWriteLease::acquire(Path::new(&config.local_root))?;
     let dir = project_memory_dir(config);
     for (file_name, content) in [
         (PROJECT_STATE_FILE, &memory.project_state),
@@ -602,8 +649,17 @@ pub(super) fn save_project_memory(
         (REFERENCES_FILE, &memory.references),
         (DOCUMENTS_FILE, &memory.documents),
     ] {
-        fs::write(dir.join(file_name), content)
-            .map_err(|error| format!("写入 project memory 失败: {}", error))?;
+        let path = dir.join(file_name);
+        let current = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        if current.starts_with("<!-- TunnelDock required-continuation:")
+            && !content.starts_with(current.lines().next().unwrap_or_default())
+        {
+            return Err(format!(
+                "{} was compacted: reload before saving; required continuation must not be dropped",
+                file_name
+            ));
+        }
+        fs::write(path, content).map_err(|error| format!("写入 project memory 失败: {}", error))?;
     }
     let _ = refresh_memory_status(config)?;
     Ok(())
@@ -614,6 +670,23 @@ mod tests {
     use super::{compute_memory_health_from_dir, write_memory_status, PROJECT_STATE_FILE};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn canonical_writer_respects_compactor_exclusive_lease() {
+        let root = std::env::temp_dir().join(format!(
+            "td-memory-lease-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).expect("fixture");
+        let first = super::CanonicalWriteLease::acquire(&root).expect("first writer");
+        assert!(super::CanonicalWriteLease::acquire(&root).is_err());
+        drop(first);
+        let second = super::CanonicalWriteLease::acquire(&root).expect("released writer");
+        drop(second);
+        assert!(!root.join(".tunneldock/memory-compaction.lock").exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
 
     #[test]
     fn memory_health_marks_over_budget_current_view() {

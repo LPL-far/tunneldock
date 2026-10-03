@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const ENGINE_VERSION = 'tunneldock-context-1';
+const ENGINE_VERSION = 'tunneldock-context-2-required-continuations';
 const MEMORY = ['PROJECT_STATE.md','SESSION_HANDOFF.md','DECISIONS.md','MODEL_DESIGN.md','DATA_CATALOG.md','EXPERIMENTS.md','RESULTS.md','REFERENCES.md','DOCUMENTS.md'];
 const LIMITS = Object.freeze({ hot: 12288, memoryFile: 2*1024*1024, codeFile: 128*1024, codeFiles: 1200, codeBytes: 8*1024*1024, scanEntries: 20000 });
 const hash = b => crypto.createHash('sha256').update(b).digest('hex');
@@ -143,7 +143,19 @@ function refresh(projectRoot,projectId='local') {
     Object.assign(status,readJson(statusFile,{}),{project_id:projectId,phase:'scanning',started_at:now(),error:null});
     report('scanning');
     const memory=MEMORY.map(n=>({path:'.project_memory/'+n,kind:'memory'})).filter(r=>fs.existsSync(safe(root,r.path)));
-    const scan=sourceRows(root);const rows=[...memory,...scan.rows];
+    // Required continuations remain searchable; a shorter root file must not hide evidence.
+    const expanded=new Map(memory.map(row=>[row.path,row]));
+    for(const row of memory) {
+      const fd=fs.openSync(safe(root,row.path),'r');const head=Buffer.alloc(96);
+      let count;try{count=fs.readSync(fd,head,0,head.length,0);}finally{fs.closeSync(fd);}
+      if(!head.subarray(0,count).toString('utf8').startsWith('<!-- TunnelDock required-continuation:'))continue;
+      const {expand}=require('./memory-compaction.cjs');
+      for(const doc of expand(root,path.posix.basename(row.path))) {
+        const rel='.project_memory/'+doc.path;
+        if(!expanded.has(rel))expanded.set(rel,{path:rel,kind:'memory',continuation:true});
+      }
+    }
+    const scan=sourceRows(root);const rows=[...expanded.values(),...scan.rows];
     const objects=safe(root,'.tunneldock/context/objects');fs.mkdirSync(objects,{recursive:true});
     const docs=[];let sourceMemoryBytes=0;
     for(const row of rows) {
@@ -158,9 +170,9 @@ function refresh(projectRoot,projectId='local') {
       const after=fs.statSync(file);
       if(after.size!==stat.size || after.mtimeMs!==stat.mtimeMs) throw Error('Source changed during read: '+row.path);
       const sha256=immutable(objects,data);
-      const entry={path:slash(row.path),kind:row.kind,sha256,bytes:data.length,mtime_ms:stat.mtimeMs};
+      const entry={path:slash(row.path),kind:row.kind,sha256,bytes:data.length,mtime_ms:stat.mtimeMs,continuation:row.continuation===true};
       if(row.kind==='code') Object.assign(entry,inspectCode(data.toString('utf8')));
-      else sourceMemoryBytes+=data.length;
+      else if(!row.continuation) sourceMemoryBytes+=data.length;
       docs.push(entry);
     }
     const revision=hash(JSON.stringify({engine:ENGINE_VERSION,sources:docs.map(d=>[d.path,d.sha256]),omitted:scan.omitted}));
@@ -169,7 +181,7 @@ function refresh(projectRoot,projectId='local') {
       report('ready',{changed:false,canonical_modified:false});return status;
     }
     report('packing',{scanned_files:docs.length,memory_source_bytes:sourceMemoryBytes,omitted_count:scan.omitted.length});
-    const generated=pack(docs.filter(d=>d.kind==='memory'),objects);
+    const generated=pack(docs.filter(d=>d.kind==='memory'&&!d.continuation),objects);
     // Compare before publishing. A concurrent canonical writer never gets overwritten.
     for(const d of docs.filter(d=>d.kind==='memory')) if(hash(fs.readFileSync(safe(root,d.path)))!==d.sha256) throw Error('Canonical memory changed before publish: '+d.path);
     const prefix='.tunneldock/context/generations/'+revision;

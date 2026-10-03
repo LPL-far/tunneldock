@@ -4,18 +4,35 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
 const ENGINE: &str = include_str!("../../../../runtime/context-engine.cjs");
+const COMPACTOR: &str = include_str!("../../../../runtime/memory-compaction.cjs");
 
 pub(super) fn status(config: &ProjectRoomConfig) -> Value {
     let path = Path::new(&config.local_root)
         .join(BRIDGE_DIR)
         .join("context/status.json");
-    match fs::metadata(&path) {
+    let mut value: Value = match fs::metadata(&path) {
         Ok(meta) if meta.len() <= 32_768 => {
             read_json(&path).unwrap_or_else(|error| json!({"phase":"unavailable","error":error}))
         }
         Ok(_) => json!({"phase":"unavailable","error":"Context status exceeds budget"}),
         Err(_) => json!({"phase":"not_indexed","canonical_modified":false}),
-    }
+    };
+    let root = Path::new(&config.local_root);
+    let compaction_path = root.join(".project_memory/AUTO_COMPACTION_STATUS.json");
+    let policy: Value =
+        read_json(&root.join(".tunneldock/memory-policy.json")).unwrap_or(Value::Null);
+    let mut compact = if fs::metadata(&compaction_path)
+        .map(|m| m.len() <= 32768)
+        .unwrap_or(false)
+    {
+        read_json::<Value>(&compaction_path)
+            .unwrap_or_else(|e| json!({"state":"unavailable","error":e}))
+    } else {
+        json!({"state":"awaiting_check"})
+    };
+    compact["enabled"] = json!(policy["auto_compact"].as_bool().unwrap_or(false));
+    value["auto_compaction"] = compact;
+    value
 }
 
 fn configs(state: &AppState) -> Result<Vec<ProjectRoomConfig>, String> {
@@ -28,21 +45,65 @@ fn configs(state: &AppState) -> Result<Vec<ProjectRoomConfig>, String> {
 }
 
 fn refresh(state: &AppState, config: &ProjectRoomConfig) -> Result<(), String> {
+    // Installs the expansion helper even when auto-compaction is disabled.
+    // The compactor itself checks the explicit per-project opt-in policy.
+    let workspace_busy = state.workspaces.lock().iter().any(|w| {
+        Some(&w.id) == config.workspace_id.as_ref()
+            && !matches!(w.status.as_str(), "ready" | "stopped")
+    });
+    let runs_busy = {
+        let _guard = state.project_store_lock.lock();
+        read_json::<Vec<AgentRun>>(&project_dir(state, &config.id)?.join(RUNS_FILE))?
+            .iter()
+            .any(|r| matches!(r.status.as_str(), "running" | "interactive"))
+    };
+    if !workspace_busy && !runs_busy {
+        run_module(
+            state,
+            config,
+            "memory-compaction.cjs",
+            COMPACTOR,
+            &[&config.local_root, "--policy-enabled-only"],
+        )?;
+    } else {
+        let script = state.app_data_dir.join("runtime/memory-compaction.cjs");
+        if !script.exists() {
+            fs::create_dir_all(script.parent().ok_or("Missing runtime directory")?)
+                .map_err(|e| e.to_string())?;
+            fs::write(&script, COMPACTOR).map_err(|e| e.to_string())?;
+        }
+    }
+    run_module(
+        state,
+        config,
+        "context-engine.cjs",
+        ENGINE,
+        &["refresh", &config.local_root, &config.id],
+    )
+}
+
+fn run_module(
+    state: &AppState,
+    config: &ProjectRoomConfig,
+    name: &str,
+    source: &str,
+    args: &[&str],
+) -> Result<(), String> {
     let node = crate::utils::cmd::find_executable("node").ok_or("Node.js is unavailable")?;
     let runtime = state.app_data_dir.join("runtime");
     fs::create_dir_all(&runtime).map_err(|e| e.to_string())?;
-    let script = runtime.join("context-engine.cjs");
-    if fs::read_to_string(&script).ok().as_deref() != Some(ENGINE) {
-        fs::write(&script, ENGINE).map_err(|e| e.to_string())?;
+    let script = runtime.join(name);
+    if fs::read_to_string(&script).ok().as_deref() != Some(source) {
+        let temp = script.with_extension("cjs.tmp");
+        fs::write(&temp, source).map_err(|e| e.to_string())?;
+        fs::rename(&temp, &script).map_err(|e| e.to_string())?;
     }
-    let error_log = runtime.join(format!("context-{}.log", config.id));
+    let error_log = runtime.join(format!("{}-{}.log", name, config.id));
     let stderr = File::create(error_log).map_err(|e| e.to_string())?;
     let mut command = Command::new(node);
     command
         .arg(&script)
-        .arg("refresh")
-        .arg(&config.local_root)
-        .arg(&config.id)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(stderr));
@@ -59,8 +120,8 @@ fn refresh(state: &AppState, config: &ProjectRoomConfig) -> Result<(), String> {
                 Ok(())
             } else {
                 Err(format!(
-                    "Context refresh exited {exit}; inspect context-{}.log",
-                    config.id
+                    "Background module exited {exit}; inspect {}-{}.log",
+                    name, config.id
                 ))
             };
         }

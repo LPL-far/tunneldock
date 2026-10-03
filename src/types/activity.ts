@@ -1,4 +1,9 @@
+export interface AutoCompactionState {
+  state?: string; phase?: string; enabled?: boolean; checked_at?: string;
+  changed_files?: unknown[]; error?: string; mode?: string;
+}
 export interface ContextEngineState {
+  auto_compaction?: AutoCompactionState;
   phase: string; checked_at?: string; generated_at?: string; revision?: string;
   memory_source_bytes?: number; hot_bytes?: number; hot_budget_bytes?: number;
   indexed_code_files?: number; omitted_count?: number; hot_path?: string;

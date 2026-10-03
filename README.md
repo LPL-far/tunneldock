@@ -230,3 +230,7 @@ The native Project Room dashboard now exposes scoped context progress and search
 ### Readable handoffs and research reasoning
 
 Project Rooms can display exact handoff text as labeled reading blocks or raw source, with explicit page boundaries. New worker prompts and the generated RESEARCH_PROTOCOL.md distinguish observation, hypothesis, alternative explanation, decisive test/falsifier, evidence and decision. See [the protocol and source boundaries](docs/RESEARCH_REVIEW_PROTOCOL.md). This is presentation/guidance, not automatic scientific acceptance or a video service.
+
+### Delegation and automatic canonical pagination
+
+IQA execution is routed through the persistent `tunneldock_delegate` task receipt. With explicit project `memory-policy.json` opt-in, over-budget canonical memory is losslessly archived and paged by the existing background worker, and required originals remain searchable. See [delegated execution](docs/DELEGATED_EXECUTION.md) and [automatic canonical-memory compaction](docs/AUTO_MEMORY_COMPACTION.md). These operations do not accept scientific conclusions.

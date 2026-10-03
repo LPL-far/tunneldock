@@ -1057,6 +1057,11 @@ pub fn update_project_memory(
     let _guard = state.project_store_lock.lock();
     ensure_store(&state)?;
     let snapshot = load_snapshot_unlocked(&state, &project_id)?;
+    if !memory.updated_at.is_empty() && memory.updated_at != snapshot.memory.updated_at {
+        return Err(
+            "Canonical memory changed after this editor loaded; reload before saving".into(),
+        );
+    }
     memory.updated_at = local_now_rfc3339();
     save_project_memory(&snapshot.config, &memory)?;
     let snapshot = load_snapshot_unlocked(&state, &project_id)?;
