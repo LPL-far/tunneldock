@@ -118,6 +118,8 @@ pub fn run() {
             // Project Rooms
             commands::project_room::list_project_rooms,
             commands::project_room::get_project_room,
+            commands::project_room::activity::get_project_activity,
+            commands::project_room::activity::read_project_handoff,
             commands::project_room::update_project_config,
             commands::project_room::update_project_memory,
             commands::project_room::upsert_project_task,

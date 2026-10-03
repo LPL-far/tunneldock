@@ -60,12 +60,26 @@ pub(super) fn persist_durable_session_hint(
 ) {
 }
 
+fn install_project_flow_guard() -> Result<(), String> {
+    let root = dirs::home_dir().ok_or("Cannot locate Pi extension directory")?.join(".pi/agent/extensions");
+    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let path = root.join("tunneldock-flow.ts");
+    let source = include_str!("../../../pi-extensions/tunneldock-flow.ts");
+    if fs::read_to_string(&path).ok().as_deref() != Some(source) {
+        let temporary = path.with_extension("ts.tmp");
+        fs::write(&temporary, source).map_err(|e| e.to_string())?;
+        fs::rename(temporary, path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 fn spawn_durable_project_pi(
     state: &AppState,
     workspace_id: &str,
     workspace_dir: &Path,
 ) -> Result<u32, String> {
+    install_project_flow_guard()?;
     let pi = find_executable("pi")
         .ok_or_else(|| "未找到 pi 可执行文件，无法启动 durable Project Room session".to_string())?;
     let resume_session_id = state

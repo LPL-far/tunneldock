@@ -1,4 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useProjectActivity } from '../hooks/useProjectActivity';
+import { AgentActivityPanel } from './projectRooms/AgentActivityPanel';
+import { stateSignature } from './projectRooms/activityModel';
 import {
   AlertCircle,
   Brain,
@@ -33,7 +36,6 @@ import {
   listAgentRuntimes,
   listProjectRooms,
   refreshAgentCapacities,
-  refreshProjectRuns,
   scanProjectHygiene,
   updateProjectConfig,
   updateProjectMemory,
@@ -101,6 +103,10 @@ export const ProjectRoomsView: React.FC = () => {
   const { t, locale } = useTranslation();
   const [summaries, setSummaries] = useState<ProjectRoomSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId;
+  const { activity, error: activityError } = useProjectActivity(selectedId);
+  const activityState = stateSignature(activity);
   const [room, setRoom] = useState<ProjectRoomSnapshot | null>(null);
   const [section, setSection] = useState<Section>("memory");
   const [loading, setLoading] = useState(false);
@@ -140,6 +146,7 @@ export const ProjectRoomsView: React.FC = () => {
     setError(null);
     try {
       const snapshot = await getProjectRoom(projectId);
+      if (selectedRef.current !== projectId) return;
       setRoom(snapshot);
       setMemoryDraft(snapshot.memory);
       setConfigDraft(snapshot.config);
@@ -148,9 +155,9 @@ export const ProjectRoomsView: React.FC = () => {
       setProjectPrompt(null);
       setPromptCopied(false);
     } catch (err) {
-      setError(String(err));
+      if (selectedRef.current === projectId) setError(String(err));
     } finally {
-      setLoading(false);
+      if (selectedRef.current === projectId) setLoading(false);
     }
   };
 
@@ -162,10 +169,7 @@ export const ProjectRoomsView: React.FC = () => {
           refreshAgentCapacities(),
         ]);
         setRuntimes(detectedRuntimes);
-        const first = await loadSummaries(null);
-        if (first) {
-          await loadRoom(first);
-        }
+        await loadSummaries(null);
       } catch (err) {
         setError(String(err));
       }
@@ -190,25 +194,15 @@ export const ProjectRoomsView: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!selectedId || !room?.runs.some((run) =>
-      ["running", "interactive"].includes(run.status)
-    )) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      void refreshProjectRuns(selectedId)
-        .then((snapshot) => {
-          setRoom(snapshot);
-          setMemoryDraft(snapshot.memory);
-          setConfigDraft(snapshot.config);
-          void loadSummaries(selectedId);
-        })
-        .catch((err) => setError(String(err)));
-    }, 4000);
-
-    return () => window.clearInterval(timer);
-  }, [selectedId, room?.runs]);
+    if (!selectedId || activityState === '[]') return;
+    let cancelled = false;
+    // Reload task data only on lifecycle transitions. Do NOT overwrite unsaved
+    // config/memory edits or ask the UI to own the background worker poll loop.
+    void getProjectRoom(selectedId).then(snapshot => {
+      if (!cancelled && selectedRef.current === selectedId) setRoom(snapshot);
+    }).catch(err => { if (!cancelled) setError(String(err)); });
+    return () => { cancelled = true; };
+  }, [selectedId, activityState]);
 
   const selectedSummary = useMemo(
     () => summaries.find((item) => item.id === selectedId) ?? null,
@@ -513,7 +507,7 @@ export const ProjectRoomsView: React.FC = () => {
         />
 
         <div className="min-w-0">
-          {loading || !room || !memoryDraft || !configDraft ? (
+          {loading || !room || room.config.id !== selectedId || !memoryDraft || !configDraft ? (
             <div className="min-h-[420px] rounded-xl border border-zinc-800 bg-dark-card flex items-center justify-center text-zinc-500">
               <LoaderCircle className="w-5 h-5 animate-spin" />
             </div>
@@ -530,6 +524,8 @@ export const ProjectRoomsView: React.FC = () => {
                 onOpenProjectPrompt={() => void openProjectPrompt()}
                 onCopyProjectPrompt={() => void copyProjectPrompt()}
               />
+
+              <AgentActivityPanel data={activity} error={activityError} cwd={room.config.local_root} />
 
               <div className="flex flex-wrap gap-1 rounded-xl border border-zinc-800/80 bg-zinc-950/35 p-1">
                 {sections.map((item) => {

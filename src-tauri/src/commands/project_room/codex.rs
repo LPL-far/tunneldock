@@ -743,6 +743,7 @@ pub(super) fn poll_run(
     thread_id: &str,
     start_offset: usize,
     prompt: &str,
+    output_path: &Path,
 ) -> Result<CodexRunUpdate, String> {
     let mut binding = resolve_thread(thread_id)?;
     binding.start_offset = start_offset;
@@ -755,6 +756,9 @@ pub(super) fn poll_run(
         .map_err(|error| format!("读取 Codex rollout 增量失败: {error}"))?;
 
     let mut target_turn = None;
+    let mut units = 0usize;
+    let mut last_event = "turn_started";
+    let mut event_at = None;
     for line in appended.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -763,10 +767,35 @@ pub(super) fn poll_run(
             target_turn = user_message_turn_id(&value, prompt);
         }
         if let Some(turn_id) = target_turn.as_deref() {
+            let payload = &value["payload"];
+            let kind = payload["type"].as_str().unwrap_or("");
+            let event = match kind {
+                "function_call" | "custom_tool_call" => Some("tool_started"),
+                "function_call_output" | "custom_tool_call_output" => Some("tool_returned"),
+                "agent_message" | "message" if payload["role"].as_str() == Some("assistant") => {
+                    Some("response")
+                }
+                "task_complete" | "task_failed" | "turn_aborted" => Some("turn_finished"),
+                _ => None,
+            };
+            if let Some(event) = event {
+                units += 1;
+                last_event = event;
+                event_at = value["timestamp"].as_str().map(ToOwned::to_owned);
+            }
             if let Some(update) = terminal_update(&value, turn_id) {
+                super::activity::record_progress(
+                    output_path,
+                    units,
+                    last_event,
+                    event_at.as_deref(),
+                );
                 return Ok(update);
             }
         }
+    }
+    if units > 0 {
+        super::activity::record_progress(output_path, units, last_event, event_at.as_deref());
     }
     Ok(CodexRunUpdate::Running)
 }

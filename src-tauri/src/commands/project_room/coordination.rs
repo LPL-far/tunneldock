@@ -174,6 +174,9 @@ Codex/Gemini tasks auto-dispatch by default when this event comes from the Web c
 }
 ```
 
+## review.started
+Before reviewing a received result, emit `{"kind":"review.started","author":"chatgpt","task_id":"TASK-...","run_id":"RUN-..."}`. This records actual Web review activity, not approval. Always bind the review to the CURRENT run. Include `run_id` on `task.review` to reject stale acceptance after a retry. The agent activity panel distinguishes receipt, active review and acceptance; copying/opening a handoff is not a review.
+
 ## task.review
 ChatGPT Web uses this only for non-consultation work that the local finalizer deferred (or tasks explicitly created with `review_mode=web`). Every worker run may write `<run>/FINALIZER.json`: `accept` means the strict mechanical contract was satisfied locally; `defer_web` gives the reason Web judgment is still required; `block` records a worker-reported blocker or failed verification. ChatGPT closes deferred work after personally checking the handoff and decisive source/test evidence. `accept` requires a real completed worker run and non-empty HANDOFF; `revise` requeues the same task with the review summary fed into the next worker attempt; `block` stops it with an explicit reason; `supersede` closes an obsolete review/blocked/backlog item so stale work does not remain pending forever.
 ```json
@@ -482,6 +485,7 @@ fn consultation_barriers(tasks: &[ProjectTask], runs: &[AgentRun]) -> Vec<serde_
 }
 
 pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), String> {
+    super::activity::sync(snapshot)?;
     let bridge_dir = PathBuf::from(&snapshot.config.local_root).join(BRIDGE_DIR);
     fs::create_dir_all(&bridge_dir)
         .map_err(|error| format!("创建 {} 失败: {}", bridge_dir.display(), error))?;
@@ -985,6 +989,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
         "consultations": web_consultations,
         "review_gate": &review_gate,
         "detail_sources": {
+            "activity": bridge_dir.join("agent_activity.json"),
             "status": bridge_dir.join(WEB_STATUS_FILE),
             "session_binding": bridge_dir.join(SESSION_BINDING_FILE),
             "full_snapshot": bridge_dir.join(BRIDGE_FILE),
@@ -1271,8 +1276,9 @@ fn validate_work_task_acceptance(task: &ProjectTask, runs: &[AgentRun]) -> Resul
     }
     let completed_run = runs
         .iter()
-        .filter(|run| run.task_id == task.id && run.status == "completed")
+        .filter(|run| run.task_id == task.id)
         .max_by_key(|run| run.started_at.as_str())
+        .filter(|run| run.status == "completed")
         .ok_or_else(|| {
             format!(
                 "task.review 拒绝 accept：{} 没有真实 completed worker run",
@@ -2031,6 +2037,9 @@ pub(super) fn process_project_event_unlocked(
             );
             write_json(&path, &tasks)?;
         }
+        "review.started" => {
+            super::activity::start_review(state, project_id, value, &author)?;
+        }
         "task.review" => {
             if author != "chatgpt" {
                 return Err("task.review 只能由 ChatGPT Web 最终 reviewer 提交".to_string());
@@ -2050,6 +2059,10 @@ pub(super) fn process_project_event_unlocked(
 
             let tasks_path = dir.join(TASKS_FILE);
             let mut tasks = read_json::<Vec<ProjectTask>>(&tasks_path)?;
+            if value.get("run_id").is_some() {
+                let runs = read_json::<Vec<AgentRun>>(&dir.join(RUNS_FILE))?;
+                super::activity::latest_review_target(&tasks, &runs, value)?;
+            }
             let task = tasks
                 .iter_mut()
                 .find(|task| task.id == task_id)

@@ -218,3 +218,7 @@ tunneldock/
 </p>
 
 主程序独立运行、原生守护恢复、主动退出与 Codex writer ownership 接续规则，参见 [Desktop runtime recovery](docs/DESKTOP_RUNTIME_RECOVERY.md)。
+
+### Agent activity and review
+
+Project Rooms now show Codex and Antigravity/Gemini execution, receipt and actual Web-review state side by side, with bounded handoff previews and explicit attempt/thread identity. See [Agent activity and review receipts](docs/AGENT_ACTIVITY_AND_REVIEW.md) for lifecycle semantics, browser wake-up limitations and the scoped 8 KiB Pi output guard.

@@ -482,7 +482,7 @@ pub(super) fn refresh_run_states_unlocked(
                     continue;
                 }
             };
-            match codex::poll_run(thread_id, start_offset, &prompt) {
+            match codex::poll_run(thread_id, start_offset, &prompt, &output_path) {
                 Ok(codex::CodexRunUpdate::Running) => {
                     if run.pid.map(is_process_running) == Some(false) {
                         let error = "Codex background app-server exited before the turn produced a handoff.".to_string();
@@ -591,7 +591,7 @@ pub(super) fn refresh_run_states_unlocked(
                 continue;
             };
             let start_step = run.start_step.unwrap_or_default();
-            match antigravity::poll_run(cascade_id, start_step) {
+            match antigravity::poll_run(cascade_id, start_step, &output_path) {
                 Ok(antigravity::CascadeRunUpdate::Running) => continue,
                 Ok(antigravity::CascadeRunUpdate::Completed(text)) => {
                     run.error_message = None;

@@ -273,7 +273,11 @@ fn final_response(steps: &[Value]) -> Option<String> {
     })
 }
 
-pub(super) fn poll_run(cascade_id: &str, start_step: usize) -> Result<CascadeRunUpdate, String> {
+pub(super) fn poll_run(
+    cascade_id: &str,
+    start_step: usize,
+    output_path: &Path,
+) -> Result<CascadeRunUpdate, String> {
     let target = rpc_target()?;
     let summaries = cascade_summaries(&target)?;
     let Some((_, summary)) = summaries.iter().find(|(id, _)| id == cascade_id) else {
@@ -283,6 +287,18 @@ pub(super) fn poll_run(cascade_id: &str, start_step: usize) -> Result<CascadeRun
         )));
     };
     let binding = binding_from_summary(cascade_id.to_string(), summary);
+    if binding.step_count > start_step {
+        super::activity::record_progress(
+            output_path,
+            binding.step_count - start_step,
+            if binding.status == IDLE_STATUS {
+                "turn_finished"
+            } else {
+                "steps_received"
+            },
+            None,
+        );
+    }
     if binding.step_count <= start_step || binding.status != IDLE_STATUS {
         return Ok(CascadeRunUpdate::Running);
     }

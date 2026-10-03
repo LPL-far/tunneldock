@@ -1,4 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ProjectActivity, HandoffPage } from '../types/activity';
+
+export async function getProjectActivity(projectId: string): Promise<ProjectActivity> {
+  return invoke<ProjectActivity>('get_project_activity', { projectId });
+}
+export async function readProjectHandoff(projectId: string, runId: string, offset = 0): Promise<HandoffPage> {
+  return invoke<HandoffPage>('read_project_handoff', { projectId, runId, offset });
+}
+
 import {
   EnvCheckItem,
   DoctorReport,
