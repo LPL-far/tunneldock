@@ -39,11 +39,8 @@ Byte reduction means `(canonical source bytes - derived working-set bytes) / can
 
 `tests/context-engine-review.acceptance.cjs` adds isolated fixture checks for failed-refresh lease cleanup, search-time content-integrity verification, excluded-source coverage changes, stale impact results, symlinked immutable-object reuse and invalid canonical encoding. Test outcomes belong in the verification logs for the exact built revision; the existence of tests is not a passing-test claim.
 
-## Articles not yet accessible
+## Article text supplied after initial audit
 
-The following exact sources were requested but returned verification pages rather than article bodies during both browser and direct read attempts:
+Original fetches of the two requested WeChat URLs returned verification pages. On 2026-10-03 the user supplied an English passage about readable multimodal explanations and a Chinese article organizing research narratives into six paradigms. These pasted materials, not successful URL fetches, are now the basis of RESEARCH_REVIEW_PROTOCOL.md.
 
-- https://mp.weixin.qq.com/s/5YPKctLVxVKXVwa1KDiH4A
-- https://mp.weixin.qq.com/s/mnU8PE-6DZ38rJqHeOiSfQ
-
-Status: **awaiting accessible article text/export**. No research claims, experimental directions or algorithm changes have been inferred from their opaque URLs. Preserve the existing research hypotheses and evaluation gates until the article text can be reviewed and cited.
+Adopted: clear wording, appropriate presentation format, root-cause reasoning, alternatives and falsifiable experiments. Not verified or promoted: submission counts, review-time claims, the 35-paper award roster, paper-specific metrics, and claims about why a paper received an award. No current method lineage or accepted result is changed by this protocol. STE-inspired writing is not a certificate of standard compliance.

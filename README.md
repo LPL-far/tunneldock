@@ -226,3 +226,7 @@ Project Rooms now show Codex and Antigravity/Gemini execution, receipt and actua
 ### Local context and automated memory working set
 
 The native Project Room dashboard now exposes scoped context progress and searchable, versioned memory/code. A bounded 12 KiB retrieval working set refreshes automatically; canonical scientific memory is never silently rewritten. See [upstream integration and limits](docs/UPSTREAM_INTEGRATION.md) and [pinned source audit](docs/upstream-lock.json).
+
+### Readable handoffs and research reasoning
+
+Project Rooms can display exact handoff text as labeled reading blocks or raw source, with explicit page boundaries. New worker prompts and the generated RESEARCH_PROTOCOL.md distinguish observation, hypothesis, alternative explanation, decisive test/falsifier, evidence and decision. See [the protocol and source boundaries](docs/RESEARCH_REVIEW_PROTOCOL.md). This is presentation/guidance, not automatic scientific acceptance or a video service.

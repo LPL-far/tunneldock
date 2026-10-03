@@ -5,6 +5,7 @@ import type { AgentActivityCard, HandoffPage, ProjectActivity, TaskActivity } fr
 import { readProjectHandoff } from '../../api';
 import { duration, phaseStep, reviewPrompt } from './activityModel';
 import { ContextEnginePanel } from './ContextEnginePanel';
+import { HandoffReader } from './HandoffReader';
 
 const button = 'inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-300 hover:border-sky-500 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:opacity-40';
 export function AgentActivityPanel({ data, error, cwd }: { data: ProjectActivity | null; error: string | null; cwd: string }) {
@@ -94,7 +95,7 @@ export function AgentActivityPanel({ data, error, cwd }: { data: ProjectActivity
       <div className="flex justify-between gap-3"><h4 className="text-sm text-zinc-100">{selected.title}</h4><button aria-label={t('activity.close')} className="text-zinc-400 hover:text-white" onClick={() => { request.current++; setSelected(null); }}><X size={17}/></button></div>
       <p className="my-2 text-xs text-amber-300">{t('activity.preview_note')}</p>
       {busy ? <LoaderCircle className="animate-spin motion-reduce:animate-none" size={16}/> : page && <>
-        <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-zinc-900/50 p-3 text-xs leading-6 text-zinc-300">{page.text}</pre>
+        <HandoffReader text={page.text} offset={page.offset} complete={page.complete}/>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button disabled={offsets.length < 2} className={button} onClick={() => void load(selected,offsets[offsets.length-2],offsets.slice(0,-1))}>{t('activity.previous')}</button>
           <span className="text-xs font-mono text-zinc-500">{page.offset}–{page.next_offset} / {page.total_bytes} B</span>

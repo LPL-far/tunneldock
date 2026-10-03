@@ -60,12 +60,11 @@ The existing two-agent dashboard is extended rather than replaced. Capacity deta
 
 It does not invent a percentage, claim Web review on worker self-report, or wake an inactive ChatGPT tab. Receiving a result and accepting its scientific meaning remain different states.
 
-## WeChat sources still pending
+## Article text received and adopted
 
-- https://mp.weixin.qq.com/s/5YPKctLVxVKXVwa1KDiH4A
-- https://mp.weixin.qq.com/s/mnU8PE-6DZ38rJqHeOiSfQ
+The user supplied the English readable-output note and the Chinese six-paradigm research article on 2026-10-03. Earlier direct WeChat fetches still only returned verification pages; the pasted text is now the usable source, not a successful URL fetch. Source attribution and award/statistical assertions remain unverified.
 
-Both fetches returned a verification shell rather than article content. No article title or scientific recommendation was inferred. Paste/exported article text is required before incorporating its specific research ideas. This integration does not modify the three research projects' method lineages.
+See [Research reasoning and readable evidence](RESEARCH_REVIEW_PROTOCOL.md). Its writing/output-format guidance and observation/hypothesis/alternative/test/falsifier/evidence/decision chain are propagated as generated Project Room guidance. The native handoff reader segments exact source text without changing task acceptance. This does not implement video narration, force a new research architecture or validate the article's 35-paper award list.
 
 ## Verification
 

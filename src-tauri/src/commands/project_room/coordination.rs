@@ -15,6 +15,12 @@ This project is optimized for top-conference research, not product feature accum
 - Project memory is lifecycle-managed, not append-only prompt text. Keep canonical/current memory bounded; move settled or superseded history into `.project_memory/archive/`, preserve lifecycle events in the append-only ledger, and read historical detail only on demand.
 - Agent capacity/quota telemetry and task-transport health are separate signals. `capacities[].available` only means runtime/quota availability. Use `transports[]` for communication health. Codex app-server endpoints are per-run ephemeral; once a run finishes, its old localhost port is expected to disappear and must not be probed as a current health check.
 
+## Readable evidence and research reasoning
+- Read `.tunneldock/RESEARCH_PROTOCOL.md` when explaining or reviewing a research result. Use short complete sentences and consistent terms; preserve exact identifiers, numbers, negation and uncertainty. This is STE-inspired guidance, not certified ASD-STE100 compliance.
+- Separate observation, root-cause hypothesis, alternatives, decisive test/falsifier, evidence/limits and the next decision. Missing evidence is UNKNOWN/NOT_TESTED. A source claim, worker interpretation and accepted result are different states.
+- The six narrative lenses in the supplied article are analytical questions, not award guarantees or authority to change the project's method. Verify awards/statistics/paper claims before promoting them into project facts.
+- Use source-linked diagrams or interactive explanations when useful. Videos/narration are optional, not a new default task or dependency. Presentation never replaces the full evidence or its review.
+
 ## Default agent roles
 - ChatGPT: coordinator, research lead, experiment interpreter, final reviewer, and quota-allocation brain.
 - Codex: primary engineer for robust implementation, refactoring, tests, and code correctness.
@@ -1007,6 +1013,7 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
             "session_binding": bridge_dir.join(SESSION_BINDING_FILE),
             "full_snapshot": bridge_dir.join(BRIDGE_FILE),
             "inbox_protocol": bridge_dir.join(INBOX_PROTOCOL_FILE),
+            "research_protocol": bridge_dir.join("RESEARCH_PROTOCOL.md"),
             "run_root": bridge_dir.join(RUNS_DIR),
         },
         "web_budget": {
@@ -1020,6 +1027,12 @@ pub(super) fn sync_project_bridge(snapshot: &ProjectRoomSnapshot) -> Result<(), 
     let _ = write_json_if_changed(&bridge_dir.join(WEB_STATUS_FILE), &web_status)?;
     let _ = write_json_if_changed(&bridge_dir.join(WEB_CONTEXT_FILE), &web_context)?;
 
+    let protocol_path = bridge_dir.join("RESEARCH_PROTOCOL.md");
+    let protocol = include_str!("../../../../docs/RESEARCH_REVIEW_PROTOCOL.md");
+    if fs::read_to_string(&protocol_path).ok().as_deref() != Some(protocol) {
+        fs::write(&protocol_path, protocol)
+            .map_err(|error| format!("Write Research Protocol failed: {error}"))?;
+    }
     fs::write(bridge_dir.join(CONSTITUTION_FILE), project_constitution())
         .map_err(|error| format!("写入 Project Constitution 失败: {}", error))?;
     fs::write(bridge_dir.join(INBOX_PROTOCOL_FILE), inbox_protocol())
@@ -2712,5 +2725,30 @@ mod tests {
             .expect("removed stale log should pass");
 
         fs::remove_dir_all(root).expect("cleanup");
+    }
+}
+
+#[cfg(test)]
+mod research_protocol_tests {
+    #[test]
+    fn generated_guidance_preserves_evidence_and_review_boundaries() {
+        let constitution = super::project_constitution();
+        assert!(constitution.contains("RESEARCH_PROTOCOL.md"));
+        assert!(constitution.contains("UNKNOWN/NOT_TESTED"));
+        assert!(constitution.contains("not certified ASD-STE100 compliance"));
+        let protocol = include_str!("../../../../docs/RESEARCH_REVIEW_PROTOCOL.md");
+        for paradigm in [
+            "根因手术刀",
+            "反直觉重构",
+            "理论照亮经验",
+            "新基准暴露失效",
+            "社会价值叙事",
+            "极简统一美学",
+        ] {
+            assert!(protocol.contains(paradigm));
+        }
+        assert!(protocol.contains("source claims, not verified project facts"));
+        assert!(protocol.contains("does not summarize, fact-check, accept a task"));
+        assert!(protocol.contains("not verified ASD-STE100 compliance"));
     }
 }

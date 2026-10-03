@@ -362,6 +362,7 @@ Project boundaries:
 - Versioned context index (when ready): {local}\.tunneldock\context\current.json
 - Full Project Room snapshot (on demand): {local}\.tunneldock\project_room.json
 - Constitution: {local}\.tunneldock\CONSTITUTION.md
+- Research reasoning / readable evidence: {local}\.tunneldock\RESEARCH_PROTOCOL.md
 - Canonical memory: {local}\.project_memory\PROJECT_STATE.md and SESSION_HANDOFF.md
 - {write_scope}
 
@@ -376,6 +377,7 @@ Research rules:
 Before editing/reviewing, start with web_status.json, Constitution, MEMORY_INDEX.md, and the project instructions (AGENTS.md/README). When .tunneldock/context/status.json is ready, read .tunneldock/context/current.json and its hot working-set path for orientation; use the scoped tunneldock_context search/read/impact tool when available. This incomplete generated view is NOT canonical truth. Read the current original constraints in PROJECT_STATE.md/SESSION_HANDOFF.md and the relevant domain/source sections before changing behavior; fully inspect decisive evidence and all required handoffs before accepting conclusions. If the index is missing, stale or blocked, use the original files directly. Read full project_room.json only when compact state omits needed task details. Do not batch-read unrelated historical memory or infer an absent constraint from a compressed excerpt.
 If the task is underspecified or conflicts with current evidence, state the conflict instead of inventing a design.
 After implementation, run the smallest sufficient correctness checks.
+Explain the decisive change with short complete sentences and stable terminology. Preserve exact conditions, numbers, paths, errors and uncertainty; do not claim certified ASD-STE100 compliance. For a research decision only, consult RESEARCH_PROTOCOL.md and include a compact Research reasoning section within the existing response budget: observation, hypothesis, alternatives, decisive test/falsifier, evidence/limits, next decision. Use UNKNOWN/NOT_TESTED for missing evidence. Do not run unrelated experiments to fill this outline, manufacture causal/novelty claims from score gains, or change the accepted method because of an article. Diagrams/HTML/videos are on demand, never a substitute for reviewed evidence.
 {response_rule}
 Your final response must be a concise handoff with:
 1. Outcome: DONE or BLOCKED

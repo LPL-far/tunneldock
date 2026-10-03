@@ -59,10 +59,10 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 use std::os::windows::process::CommandExt;
 
 pub mod activity;
-pub mod context_engine;
 mod agent_worker;
 mod antigravity;
 mod codex;
+pub mod context_engine;
 mod coordination;
 mod memory;
 mod telemetry;
